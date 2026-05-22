@@ -11,8 +11,8 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates tzdata \
  && rm -rf /var/lib/apt/lists/*
 RUN useradd --create-home --uid 1000 brclientd \
- && mkdir -p /data \
- && chown -R brclientd:brclientd /data
+ && mkdir -p /home/brclientd/.brclientd \
+ && chown -R brclientd:brclientd /home/brclientd
 COPY --from=build /out/brclientd /usr/local/bin/brclientd
 USER brclientd
 WORKDIR /home/brclientd
