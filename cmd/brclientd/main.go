@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/companyzero/bisonrelay/client"
-	"github.com/companyzero/bisonrelay/client/clientdb"
 	"github.com/decred/dcrlnd/lnrpc"
 	flags "github.com/jessevdk/go-flags"
 
@@ -25,7 +24,6 @@ import (
 	"github.com/karamble/brclientd/internal/identity"
 	brlog "github.com/karamble/brclientd/internal/log"
 	"github.com/karamble/brclientd/internal/runtime"
-	"github.com/karamble/brclientd/internal/setup"
 )
 
 const Version = "0.0.1"
@@ -77,57 +75,28 @@ func run(args []string) error {
 		return fmt.Errorf("open clientdb: %w", err)
 	}
 
-	dbDone := make(chan struct{})
-	go func() {
-		defer close(dbDone)
-		if err := db.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-			brlog.BRDB.Errorf("clientdb.Run: %v", err)
-		}
-	}()
-
-	id, haveIdentity, err := identity.Existing(ctx, db)
+	pc, err := connectDcrlnd(ctx, cfg)
 	if err != nil {
-		return fmt.Errorf("check local identity: %w", err)
-	}
-
-	if !haveIdentity {
-		if err := provisionIdentity(ctx, cfg, db, certs); err != nil {
-			return err
-		}
-		id, _, err = identity.Existing(ctx, db)
-		if err != nil {
-			return fmt.Errorf("reload local identity: %w", err)
-		}
-	}
-	if id != nil {
-		brlog.BRCD.Infof("Local identity ready: nick=%q", id.Public.Nick)
-	}
-
-	if err := connectDcrlnd(ctx, cfg); err != nil {
 		return err
 	}
 
-	runtimeErr := make(chan error, 1)
-	go func() {
-		runtimeErr <- runtime.Run(ctx, runtime.Config{
-			Log:        brlog.RUNT,
-			Certs:      certs,
-			Listen:     cfg.ClientRPC.Listen,
-			AppName:    config.AppName,
-			AppVersion: Version,
-		})
-	}()
-
-	brlog.BRCD.Infof("ready (phase 3; clientrpc VersionService active)")
-	select {
-	case <-ctx.Done():
-	case err := <-runtimeErr:
-		if err != nil && !errors.Is(err, context.Canceled) {
-			brlog.BRCD.Errorf("clientrpc exited: %v", err)
-		}
+	brlog.BRCD.Infof("Handing off to BR runtime (pre-setup runs only if identity is missing)")
+	err = runtime.Run(ctx, runtime.Config{
+		Log:             brlog.RUNT,
+		LogFn:           brlog.LoggerFn,
+		Certs:           certs,
+		ClientRPCListen: cfg.ClientRPC.Listen,
+		StatusListen:    cfg.Status.Listen,
+		AppName:         config.AppName,
+		AppVersion:      Version,
+		BRServer:        cfg.BRServer,
+		DB:              db,
+		DcrlndPay:       pc,
+	})
+	if err != nil && !errors.Is(err, context.Canceled) {
+		return err
 	}
 	brlog.BRCD.Infof("shutting down")
-	<-dbDone
 	return nil
 }
 
@@ -147,22 +116,7 @@ func ensureCerts(cfg *config.Config) (certgen.Triplet, error) {
 	return certs, nil
 }
 
-func provisionIdentity(ctx context.Context, cfg *config.Config, db *clientdb.DB, certs certgen.Triplet) error {
-	brlog.BRCD.Infof("No local identity found; entering pre-setup mode")
-	srv := &setup.Server{
-		Log:    brlog.SETP,
-		DB:     db,
-		Certs:  certs,
-		Listen: primaryListen(cfg.ClientRPC.Listen),
-	}
-	if err := srv.Run(ctx); err != nil {
-		return fmt.Errorf("pre-setup endpoint: %w", err)
-	}
-	brlog.BRCD.Infof("Identity provisioned; pre-setup endpoint stopped")
-	return nil
-}
-
-func connectDcrlnd(ctx context.Context, cfg *config.Config) error {
+func connectDcrlnd(ctx context.Context, cfg *config.Config) (*client.DcrlnPaymentClient, error) {
 	brlog.BRCD.Infof("Connecting to dcrlnd at %s", cfg.Dcrlnd.RPCHost)
 	dialCtx, dialCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer dialCancel()
@@ -174,7 +128,7 @@ func connectDcrlnd(ctx context.Context, cfg *config.Config) error {
 		Log:          brlog.LNPC,
 	})
 	if err != nil {
-		return fmt.Errorf("dcrlnd payment client: %w", err)
+		return nil, fmt.Errorf("dcrlnd payment client: %w", err)
 	}
 
 	info, err := pc.LNRPC().GetInfo(dialCtx, &lnrpc.GetInfoRequest{})
@@ -187,7 +141,7 @@ func connectDcrlnd(ctx context.Context, cfg *config.Config) error {
 	default:
 		brlog.BRCD.Warnf("dcrlnd reachable but GetInfo failed: %v", err)
 	}
-	return nil
+	return pc, nil
 }
 
 func certHosts(cfg *config.Config) []string {

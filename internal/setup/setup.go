@@ -20,11 +20,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/companyzero/bisonrelay/client/clientdb"
+	"github.com/companyzero/bisonrelay/zkidentity"
 	"github.com/decred/slog"
 
 	"github.com/karamble/brclientd/internal/certgen"
-	"github.com/karamble/brclientd/internal/identity"
 )
 
 // Request is the JSON body accepted by POST /create-identity.
@@ -33,12 +32,15 @@ type Request struct {
 	Name string `json:"name"`
 }
 
-// Server hosts the pre-setup endpoint.
+// Server hosts the pre-setup endpoint. When a CreateIdentity request lands,
+// the server builds a zkidentity and pushes it into IdentityChan. BR's
+// client.Run is blocked on LocalIDIniter reading from the same channel and
+// persists the identity to the clientdb itself.
 type Server struct {
-	Log    slog.Logger
-	DB     *clientdb.DB
-	Certs  certgen.Triplet
-	Listen string
+	Log          slog.Logger
+	Certs        certgen.Triplet
+	Listen       string
+	IdentityChan chan<- *zkidentity.FullIdentity
 }
 
 // Run blocks until either CreateIdentity succeeds (identity persisted, server
@@ -107,12 +109,19 @@ func (s *Server) handleCreate(done chan<- struct{}) http.HandlerFunc {
 			http.Error(w, "nick is required", http.StatusBadRequest)
 			return
 		}
-		if err := identity.Create(r.Context(), s.DB, req.Nick, req.Name); err != nil {
-			s.Log.Errorf("Create identity failed: %v", err)
+		id, err := zkidentity.New(req.Name, req.Nick)
+		if err != nil {
+			s.Log.Errorf("zkidentity.New: %v", err)
 			http.Error(w, "create identity: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-		s.Log.Infof("Local identity created: nick=%q name=%q", req.Nick, req.Name)
+		select {
+		case s.IdentityChan <- id:
+		case <-r.Context().Done():
+			http.Error(w, "request cancelled", http.StatusServiceUnavailable)
+			return
+		}
+		s.Log.Infof("Local identity submitted: nick=%q name=%q", req.Nick, req.Name)
 		w.WriteHeader(http.StatusNoContent)
 		select {
 		case done <- struct{}{}:

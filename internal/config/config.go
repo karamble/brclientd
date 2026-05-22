@@ -26,6 +26,7 @@ const (
 	DefaultDebugLevel     = "info"
 	DefaultBRServer       = "bisonrelay.org:443"
 	DefaultClientRPCPort  = "7676"
+	DefaultStatusPort     = "7677"
 )
 
 var (
@@ -47,6 +48,12 @@ type ClientRPCOptions struct {
 	IssueClientCert bool     `long:"issueclientcert" description:"Auto-generate the rpc-client cert pair on first run"`
 }
 
+// StatusOptions configure the /status HTTP endpoint that surfaces BR client
+// connection state and wallet-usability errors (config section `[status]`).
+type StatusOptions struct {
+	Listen string `long:"listen" description:"Address the /status HTTP endpoint binds to (default: 0.0.0.0:7677)"`
+}
+
 // Config is the parsed runtime configuration.
 type Config struct {
 	ShowVersion bool   `short:"V" long:"version" description:"Display version information and exit"`
@@ -61,6 +68,7 @@ type Config struct {
 
 	Dcrlnd    DcrlndOptions    `group:"dcrlnd options" namespace:"dcrlnd"`
 	ClientRPC ClientRPCOptions `group:"clientrpc options" namespace:"clientrpc"`
+	Status    StatusOptions    `group:"status options" namespace:"status"`
 }
 
 // Network reports the active network as a string used in default sub-paths.
@@ -147,6 +155,9 @@ func Load(args []string, version string) (*Config, error) {
 	}
 	if len(cfg.ClientRPC.Listen) == 0 {
 		cfg.ClientRPC.Listen = []string{"0.0.0.0:" + DefaultClientRPCPort}
+	}
+	if cfg.Status.Listen == "" {
+		cfg.Status.Listen = "0.0.0.0:" + DefaultStatusPort
 	}
 
 	if err := ensureDir(cfg.AppDataDir); err != nil {

@@ -81,6 +81,18 @@ func SetLevels(level string) error {
 	return nil
 }
 
+// LoggerFn returns a slog.Logger for an arbitrary subsystem tag, registering
+// it in the subsystem map the first time it's requested. BR's client.Config
+// expects this shape for its Logger field; brclientd wires it directly.
+func LoggerFn(subsys string) slog.Logger {
+	if l, ok := subsystems[subsys]; ok {
+		return l
+	}
+	l := backendLog.Logger(subsys)
+	subsystems[subsys] = l
+	return l
+}
+
 // SubsystemTags returns the registered subsystem names in stable order.
 func SubsystemTags() []string {
 	out := make([]string, 0, len(subsystems))
