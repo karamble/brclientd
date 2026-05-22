@@ -41,12 +41,36 @@ type Config struct {
 	DcrlndPay       *client.DcrlnPaymentClient
 }
 
-// Run starts BR client.Run (which manages db.Run), conditionally runs the
-// pre-setup endpoint while LocalIDIniter is blocked waiting for a new
-// identity, then brings up the /status HTTP server and the clientrpc
-// listener on the configured port. Blocks until ctx is cancelled.
+// Run brings up the /status HTTP server and clientrpc.VersionService
+// immediately, polls dcrlnd until its wallet is unlocked, then starts BR
+// client.Run, conditionally serves the pre-setup endpoint while
+// LocalIDIniter is blocked waiting for a new identity, and finally hands
+// off to the long-running goroutines. Blocks until ctx is cancelled.
 func Run(ctx context.Context, cfg Config) error {
 	tracker := NewTracker(cfg.Log)
+
+	g, gctx := errgroup.WithContext(ctx)
+
+	// /status + clientrpc.Version come up before anything else so the
+	// dashboard can render the dcrlnd-gate stage while we wait for the
+	// LN wallet to be unlocked.
+	g.Go(func() error {
+		srv := &StatusServer{
+			Log:     cfg.LogFn("STAT"),
+			Certs:   cfg.Certs,
+			Listen:  cfg.StatusListen,
+			Tracker: tracker,
+		}
+		return srv.Run(gctx)
+	})
+	g.Go(func() error { return runClientRPC(gctx, cfg) })
+
+	if err := waitForDcrlndUnlocked(gctx, cfg.DcrlndPay, tracker, cfg.LogFn("LNGT")); err != nil {
+		return err
+	}
+	if err := waitForChannelToHub(gctx, cfg.DcrlndPay, tracker, cfg.LogFn("CHGT")); err != nil {
+		return err
+	}
 
 	identityChan := make(chan *zkidentity.FullIdentity, 1)
 
@@ -62,8 +86,6 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 
-	g, gctx := errgroup.WithContext(ctx)
-
 	g.Go(func() error {
 		err := c.Run(gctx)
 		if err == nil || errors.Is(err, context.Canceled) {
@@ -73,8 +95,6 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	})
 
-	// Wait for the DB to be running so we can probe identity. db.Run is
-	// invoked inside c.Run; RunStarted closes once that happens.
 	select {
 	case <-cfg.DB.RunStarted():
 	case <-gctx.Done():
@@ -98,27 +118,12 @@ func Run(ctx context.Context, cfg Config) error {
 			return fmt.Errorf("pre-setup endpoint: %w", err)
 		}
 		cfg.Log.Infof("Pre-setup endpoint stopped; identity submitted")
-		// Re-load the now-persisted identity for status display.
 		id, _, _ = identity.Existing(gctx, cfg.DB)
 	}
 	if id != nil {
 		tracker.SetNick(id.Public.Nick)
 		cfg.Log.Infof("Local identity ready: nick=%q", id.Public.Nick)
 	}
-
-	g.Go(func() error {
-		srv := &StatusServer{
-			Log:     cfg.LogFn("STAT"),
-			Certs:   cfg.Certs,
-			Listen:  cfg.StatusListen,
-			Tracker: tracker,
-		}
-		return srv.Run(gctx)
-	})
-
-	g.Go(func() error {
-		return runClientRPC(gctx, cfg)
-	})
 
 	return g.Wait()
 }

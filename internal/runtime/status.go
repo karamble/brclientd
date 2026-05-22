@@ -16,20 +16,23 @@ import (
 type Stage string
 
 const (
-	StageStarting       Stage = "starting"
-	StageWalletChecking Stage = "wallet-checking"
-	StageConnecting     Stage = "connecting"
-	StageReady          Stage = "ready"
-	StageDisconnected   Stage = "disconnected"
+	StageWaitingForDcrlnd  Stage = "waiting-for-dcrlnd"
+	StageWaitingForChannel Stage = "waiting-for-channel"
+	StageStarting          Stage = "starting"
+	StageWalletChecking    Stage = "wallet-checking"
+	StageConnecting        Stage = "connecting"
+	StageReady             Stage = "ready"
+	StageDisconnected      Stage = "disconnected"
 )
 
 // Status is the on-the-wire JSON shape returned by /status.
 type Status struct {
-	Stage          Stage     `json:"stage"`
-	Nick           string    `json:"nick,omitempty"`
-	ServerNode     string    `json:"serverNode,omitempty"`
-	WalletCheckErr string    `json:"walletCheckErr,omitempty"`
-	LastUpdated    time.Time `json:"lastUpdated"`
+	Stage           Stage     `json:"stage"`
+	Nick            string    `json:"nick,omitempty"`
+	ServerNode      string    `json:"serverNode,omitempty"`
+	RecommendedPeer string    `json:"recommendedPeer,omitempty"`
+	WalletCheckErr  string    `json:"walletCheckErr,omitempty"`
+	LastUpdated     time.Time `json:"lastUpdated"`
 }
 
 // Tracker holds the current Status with mutex protection and serves both
@@ -41,12 +44,61 @@ type Tracker struct {
 	log    slog.Logger
 }
 
-// NewTracker returns a Tracker initialised with stage=starting.
+// NewTracker returns a Tracker initialised with stage=waiting-for-dcrlnd.
+// The dcrlnd unlock gate runs before BR client.Run.
 func NewTracker(log slog.Logger) *Tracker {
 	return &Tracker{
-		status: Status{Stage: StageStarting, LastUpdated: time.Now()},
+		status: Status{Stage: StageWaitingForDcrlnd, LastUpdated: time.Now()},
 		log:    log,
 	}
+}
+
+// SetDcrlndWaiting records that the daemon is still waiting for dcrlnd to be
+// unlocked. The supplied reason (typically the latest GetInfo error message)
+// goes into WalletCheckErr so the dashboard can render the underlying cause.
+func (t *Tracker) SetDcrlndWaiting(reason string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.status.Stage = StageWaitingForDcrlnd
+	t.status.WalletCheckErr = reason
+	t.status.LastUpdated = time.Now()
+}
+
+// MarkDcrlndReady advances past the dcrlnd gate. Called once GetInfo succeeds.
+func (t *Tracker) MarkDcrlndReady() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.status.Stage = StageStarting
+	t.status.WalletCheckErr = ""
+	t.status.LastUpdated = time.Now()
+}
+
+// SetRecommendedPeer publishes the BR-recommended hub URI so the dashboard
+// can render an "open channel to X" wizard step.
+func (t *Tracker) SetRecommendedPeer(uri string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.status.RecommendedPeer = uri
+	t.status.LastUpdated = time.Now()
+}
+
+// SetChannelWaiting moves the daemon into waiting-for-channel and records the
+// most recent reason (e.g. "no active channel to hub").
+func (t *Tracker) SetChannelWaiting(reason string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.status.Stage = StageWaitingForChannel
+	t.status.WalletCheckErr = reason
+	t.status.LastUpdated = time.Now()
+}
+
+// MarkChannelReady clears the channel gate.
+func (t *Tracker) MarkChannelReady() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.status.Stage = StageStarting
+	t.status.WalletCheckErr = ""
+	t.status.LastUpdated = time.Now()
 }
 
 // Get returns the current snapshot.
