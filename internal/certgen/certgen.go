@@ -11,6 +11,7 @@ package certgen
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
@@ -147,6 +148,30 @@ func signLeaf(caCert *x509.Certificate, caPriv ed25519.PrivateKey, commonName st
 		return err
 	}
 	return writePEM(keyPath, "PRIVATE KEY", keyDER, 0o600)
+}
+
+// LoadServerTLSConfig returns a *tls.Config configured for an mTLS-protected
+// server: presents t.ServerCert{Path,KeyPath} and requires + verifies client
+// certs signed by t.CACertPath.
+func (t Triplet) LoadServerTLSConfig() (*tls.Config, error) {
+	serverCert, err := tls.LoadX509KeyPair(t.ServerCertPath, t.ServerKeyPath)
+	if err != nil {
+		return nil, fmt.Errorf("load server cert: %w", err)
+	}
+	caBytes, err := os.ReadFile(t.CACertPath)
+	if err != nil {
+		return nil, fmt.Errorf("read CA cert: %w", err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(caBytes) {
+		return nil, errors.New("failed to parse CA cert")
+	}
+	return &tls.Config{
+		Certificates: []tls.Certificate{serverCert},
+		ClientCAs:    pool,
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		MinVersion:   tls.VersionTLS12,
+	}, nil
 }
 
 func writePEM(path, blockType string, der []byte, mode os.FileMode) error {

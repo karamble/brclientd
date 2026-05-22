@@ -12,14 +12,11 @@ package setup
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -47,7 +44,7 @@ type Server struct {
 // Run blocks until either CreateIdentity succeeds (identity persisted, server
 // shut down cleanly) or ctx is cancelled.
 func (s *Server) Run(ctx context.Context) error {
-	tlsCfg, err := s.tlsConfig()
+	tlsCfg, err := s.Certs.LoadServerTLSConfig()
 	if err != nil {
 		return fmt.Errorf("load tls config: %w", err)
 	}
@@ -86,27 +83,6 @@ func (s *Server) Run(ctx context.Context) error {
 		srv.Shutdown(shutdown)
 		return nil
 	}
-}
-
-func (s *Server) tlsConfig() (*tls.Config, error) {
-	serverCert, err := tls.LoadX509KeyPair(s.Certs.ServerCertPath, s.Certs.ServerKeyPath)
-	if err != nil {
-		return nil, err
-	}
-	caBytes, err := os.ReadFile(s.Certs.CACertPath)
-	if err != nil {
-		return nil, err
-	}
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(caBytes) {
-		return nil, errors.New("failed to parse CA cert")
-	}
-	return &tls.Config{
-		Certificates: []tls.Certificate{serverCert},
-		ClientCAs:    pool,
-		ClientAuth:   tls.RequireAndVerifyClientCert,
-		MinVersion:   tls.VersionTLS12,
-	}, nil
 }
 
 func (s *Server) handleCreate(done chan<- struct{}) http.HandlerFunc {

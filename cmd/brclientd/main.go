@@ -24,6 +24,7 @@ import (
 	"github.com/karamble/brclientd/internal/config"
 	"github.com/karamble/brclientd/internal/identity"
 	brlog "github.com/karamble/brclientd/internal/log"
+	"github.com/karamble/brclientd/internal/runtime"
 	"github.com/karamble/brclientd/internal/setup"
 )
 
@@ -65,6 +66,11 @@ func run(args []string) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
+	certs, err := ensureCerts(cfg)
+	if err != nil {
+		return err
+	}
+
 	idPaths := identity.PathsIn(cfg.DataDir)
 	db, err := identity.OpenDB(idPaths, brlog.BRDB)
 	if err != nil {
@@ -85,10 +91,9 @@ func run(args []string) error {
 	}
 
 	if !haveIdentity {
-		if err := provisionIdentity(ctx, cfg, db); err != nil {
+		if err := provisionIdentity(ctx, cfg, db, certs); err != nil {
 			return err
 		}
-		// Re-load now that the pre-setup endpoint has persisted it.
 		id, _, err = identity.Existing(ctx, db)
 		if err != nil {
 			return fmt.Errorf("reload local identity: %w", err)
@@ -102,35 +107,53 @@ func run(args []string) error {
 		return err
 	}
 
-	brlog.BRCD.Infof("ready (phase 2 skeleton; clientrpc not yet wired)")
-	<-ctx.Done()
+	runtimeErr := make(chan error, 1)
+	go func() {
+		runtimeErr <- runtime.Run(ctx, runtime.Config{
+			Log:        brlog.RUNT,
+			Certs:      certs,
+			Listen:     cfg.ClientRPC.Listen,
+			AppName:    config.AppName,
+			AppVersion: Version,
+		})
+	}()
+
+	brlog.BRCD.Infof("ready (phase 3; clientrpc VersionService active)")
+	select {
+	case <-ctx.Done():
+	case err := <-runtimeErr:
+		if err != nil && !errors.Is(err, context.Canceled) {
+			brlog.BRCD.Errorf("clientrpc exited: %v", err)
+		}
+	}
 	brlog.BRCD.Infof("shutting down")
 	<-dbDone
 	return nil
 }
 
-func provisionIdentity(ctx context.Context, cfg *config.Config, db *clientdb.DB) error {
-	brlog.BRCD.Infof("No local identity found; entering pre-setup mode")
-
+func ensureCerts(cfg *config.Config) (certgen.Triplet, error) {
 	certDir := filepath.Join(cfg.DataDir, "rpc")
 	certs := certgen.PathsIn(certDir)
 	present, err := certs.AllPresent()
 	if err != nil {
-		return fmt.Errorf("check certs: %w", err)
+		return certs, fmt.Errorf("check certs: %w", err)
 	}
 	if !present {
 		brlog.BRCD.Infof("Generating mTLS cert triplet at %s", certDir)
 		if err := certs.Generate(certHosts(cfg)); err != nil {
-			return fmt.Errorf("generate certs: %w", err)
+			return certs, fmt.Errorf("generate certs: %w", err)
 		}
 	}
+	return certs, nil
+}
 
-	listen := primaryListen(cfg.ClientRPC.Listen)
+func provisionIdentity(ctx context.Context, cfg *config.Config, db *clientdb.DB, certs certgen.Triplet) error {
+	brlog.BRCD.Infof("No local identity found; entering pre-setup mode")
 	srv := &setup.Server{
 		Log:    brlog.SETP,
 		DB:     db,
 		Certs:  certs,
-		Listen: listen,
+		Listen: primaryListen(cfg.ClientRPC.Listen),
 	}
 	if err := srv.Run(ctx); err != nil {
 		return fmt.Errorf("pre-setup endpoint: %w", err)
