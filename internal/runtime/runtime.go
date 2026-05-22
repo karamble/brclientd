@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 
 	"github.com/companyzero/bisonrelay/client"
 	"github.com/companyzero/bisonrelay/client/clientdb"
@@ -29,16 +30,17 @@ import (
 
 // Config bundles every parameter runtime.Run needs.
 type Config struct {
-	Log             slog.Logger
-	LogFn           func(subsys string) slog.Logger
-	Certs           certgen.Triplet
-	ClientRPCListen []string
-	StatusListen    string
-	AppName         string
-	AppVersion      string
-	BRServer        string
-	DB              *clientdb.DB
-	DcrlndPay       *client.DcrlnPaymentClient
+	Log               slog.Logger
+	LogFn             func(subsys string) slog.Logger
+	Certs             certgen.Triplet
+	ClientRPCListen   []string
+	StatusListen      string
+	AppName           string
+	AppVersion        string
+	BRServer          string
+	DB                *clientdb.DB
+	DcrlndPay         *client.DcrlnPaymentClient
+	ReplayMsgLogsRoot string
 }
 
 // Run brings up the /status HTTP server and clientrpc.VersionService
@@ -51,9 +53,12 @@ func Run(ctx context.Context, cfg Config) error {
 
 	g, gctx := errgroup.WithContext(ctx)
 
-	// /status + clientrpc.Version come up before anything else so the
-	// dashboard can render the dcrlnd-gate stage while we wait for the
-	// LN wallet to be unlocked.
+	// /status comes up before anything else so the dashboard can render
+	// the gate stages while we wait for dcrlnd to unlock + the channel to
+	// hub to activate. clientrpc itself is deferred until after the
+	// identity check below, because the pre-setup endpoint claims port
+	// 7676 in the no-identity case and would conflict with an early
+	// clientrpc bind.
 	g.Go(func() error {
 		srv := &StatusServer{
 			Log:     cfg.LogFn("STAT"),
@@ -63,7 +68,6 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 		return srv.Run(gctx)
 	})
-	g.Go(func() error { return runClientRPC(gctx, cfg) })
 
 	if err := waitForDcrlndUnlocked(gctx, cfg.DcrlndPay, tracker, cfg.LogFn("LNGT")); err != nil {
 		return err
@@ -126,24 +130,77 @@ func Run(ctx context.Context, cfg Config) error {
 		cfg.Log.Infof("Local identity ready: nick=%q", id.Public.Nick)
 	}
 
+	// clientrpc starts AFTER identity provisioning so it can share the
+	// listen address with the pre-setup endpoint (handed off cleanly when
+	// preSetup.Run returned) and so the chat / GC / posts / payments
+	// services have a live *client.Client to bind into.
+	g.Go(func() error { return runClientRPC(gctx, cfg, c) })
+
 	return g.Wait()
 }
 
-func runClientRPC(ctx context.Context, cfg Config) error {
+func runClientRPC(ctx context.Context, cfg Config, c *client.Client) error {
 	listeners, err := buildListeners(cfg.Certs, cfg.ClientRPCListen)
 	if err != nil {
 		return err
 	}
 	defer closeListeners(listeners)
 
+	if err := os.MkdirAll(cfg.ReplayMsgLogsRoot, 0o700); err != nil {
+		return fmt.Errorf("create replaymsglog dir: %w", err)
+	}
+
 	srv := rpcserver.New(rpcserver.Config{
 		JSONRPCListeners: listeners,
-		Log:              cfg.LogFn("RUNT"),
+		Log:              cfg.LogFn("RPCS"),
 	})
 	srv.InitVersionService(cfg.AppName, cfg.AppVersion)
 
+	if err := srv.InitChatService(rpcserver.ChatServerCfg{
+		Client:            c,
+		Log:               cfg.LogFn("RPCS"),
+		RootReplayMsgLogs: cfg.ReplayMsgLogsRoot,
+		PayClient:         cfg.DcrlndPay,
+	}); err != nil {
+		return fmt.Errorf("init chat service: %w", err)
+	}
+	if err := srv.InitGCService(rpcserver.GCServerCfg{
+		Client:            c,
+		Log:               cfg.LogFn("RPCS"),
+		RootReplayMsgLogs: cfg.ReplayMsgLogsRoot,
+	}); err != nil {
+		return fmt.Errorf("init gc service: %w", err)
+	}
+	if err := srv.InitPostsService(rpcserver.PostsServerCfg{
+		Client:            c,
+		Log:               cfg.LogFn("RPCS"),
+		RootReplayMsgLogs: cfg.ReplayMsgLogsRoot,
+	}); err != nil {
+		return fmt.Errorf("init posts service: %w", err)
+	}
+	if err := srv.InitPaymentsService(rpcserver.PaymentsServerCfg{
+		Client:            c,
+		Log:               cfg.LogFn("RPCS"),
+		RootReplayMsgLogs: cfg.ReplayMsgLogsRoot,
+	}); err != nil {
+		return fmt.Errorf("init payments service: %w", err)
+	}
+	if err := srv.InitResourcesService(rpcserver.ResourcesServerCfg{
+		Client: c,
+		Log:    cfg.LogFn("RPCS"),
+	}); err != nil {
+		return fmt.Errorf("init resources service: %w", err)
+	}
+	if err := srv.InitContentService(rpcserver.ContentServerCfg{
+		Client:            c,
+		Log:               cfg.LogFn("RPCS"),
+		RootReplayMsgLogs: cfg.ReplayMsgLogsRoot,
+	}); err != nil {
+		return fmt.Errorf("init content service: %w", err)
+	}
+
 	for _, addr := range cfg.ClientRPCListen {
-		cfg.Log.Infof("clientrpc listening on %s (mTLS)", addr)
+		cfg.Log.Infof("clientrpc listening on %s (mTLS, all services)", addr)
 	}
 	return srv.Run(ctx)
 }

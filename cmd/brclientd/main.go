@@ -82,16 +82,17 @@ func run(args []string) error {
 
 	brlog.BRCD.Infof("Handing off to BR runtime (pre-setup runs only if identity is missing)")
 	err = runtime.Run(ctx, runtime.Config{
-		Log:             brlog.RUNT,
-		LogFn:           brlog.LoggerFn,
-		Certs:           certs,
-		ClientRPCListen: cfg.ClientRPC.Listen,
-		StatusListen:    cfg.Status.Listen,
-		AppName:         config.AppName,
-		AppVersion:      Version,
-		BRServer:        cfg.BRServer,
-		DB:              db,
-		DcrlndPay:       pc,
+		Log:               brlog.RUNT,
+		LogFn:             brlog.LoggerFn,
+		Certs:             certs,
+		ClientRPCListen:   cfg.ClientRPC.Listen,
+		StatusListen:      cfg.Status.Listen,
+		AppName:           config.AppName,
+		AppVersion:        Version,
+		BRServer:          cfg.BRServer,
+		DB:                db,
+		DcrlndPay:         pc,
+		ReplayMsgLogsRoot: filepath.Join(cfg.DataDir, "replaymsglog"),
 	})
 	if err != nil && !errors.Is(err, context.Canceled) {
 		return err
