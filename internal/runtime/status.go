@@ -18,6 +18,7 @@ type Stage string
 const (
 	StageWaitingForDcrlnd  Stage = "waiting-for-dcrlnd"
 	StageWaitingForChannel Stage = "waiting-for-channel"
+	StageNeedsIdentity     Stage = "needs-identity"
 	StageStarting          Stage = "starting"
 	StageWalletChecking    Stage = "wallet-checking"
 	StageConnecting        Stage = "connecting"
@@ -97,6 +98,17 @@ func (t *Tracker) MarkChannelReady() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.status.Stage = StageStarting
+	t.status.WalletCheckErr = ""
+	t.status.LastUpdated = time.Now()
+}
+
+// SetNeedsIdentity marks the runtime as blocked on the pre-setup endpoint
+// receiving CreateIdentity. The dashboard wizard pivots to its nick/name
+// form when it sees this stage.
+func (t *Tracker) SetNeedsIdentity() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.status.Stage = StageNeedsIdentity
 	t.status.WalletCheckErr = ""
 	t.status.LastUpdated = time.Now()
 }

@@ -108,6 +108,7 @@ func Run(ctx context.Context, cfg Config) error {
 
 	if !hasID {
 		cfg.Log.Infof("No local identity found; running pre-setup endpoint on %s", primaryListen(cfg.ClientRPCListen))
+		tracker.SetNeedsIdentity()
 		preSetup := &setup.Server{
 			Log:          cfg.LogFn("SETP"),
 			Certs:        cfg.Certs,
