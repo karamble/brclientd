@@ -65,6 +65,7 @@ func Run(ctx context.Context, cfg Config) error {
 			Certs:   cfg.Certs,
 			Listen:  cfg.StatusListen,
 			Tracker: tracker,
+			DB:      cfg.DB,
 		}
 		return srv.Run(gctx)
 	})
