@@ -11,8 +11,10 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
+	"github.com/companyzero/bisonrelay/client"
 	"github.com/companyzero/bisonrelay/client/clientdb"
 	"github.com/companyzero/bisonrelay/zkidentity"
 	"github.com/decred/slog"
@@ -30,6 +32,24 @@ type StatusServer struct {
 	Listen  string
 	Tracker *Tracker
 	DB      *clientdb.DB
+
+	clientMu sync.RWMutex
+	client   *client.Client
+}
+
+// SetClient attaches a live *client.Client to the StatusServer once the BR
+// runtime has booted past the gates. /contacts returns 503 until this is
+// called.
+func (s *StatusServer) SetClient(c *client.Client) {
+	s.clientMu.Lock()
+	defer s.clientMu.Unlock()
+	s.client = c
+}
+
+func (s *StatusServer) currentClient() *client.Client {
+	s.clientMu.RLock()
+	defer s.clientMu.RUnlock()
+	return s.client
 }
 
 // Run blocks until ctx is cancelled or the server fails.
@@ -42,6 +62,7 @@ func (s *StatusServer) Run(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/status", s.handleStatus)
 	mux.HandleFunc("/history/pm", s.handleHistoryPM)
+	mux.HandleFunc("/contacts", s.handleContacts)
 
 	srv := &http.Server{
 		Addr:              s.Listen,
@@ -135,6 +156,26 @@ func (s *StatusServer) handleHistoryPM(w http.ResponseWriter, r *http.Request) {
 		PageSize: pageSize,
 		Entries:  entries,
 	})
+}
+
+// handleContacts returns the BR client's in-memory address book entries.
+// 503 until the BR client has been instantiated (i.e. until past the
+// gate / pre-setup phase).
+func (s *StatusServer) handleContacts(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	c := s.currentClient()
+	if c == nil {
+		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
+		return
+	}
+	entries := c.AddressBook()
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(struct {
+		Entries []*clientdb.AddressBookEntry `json:"entries"`
+	}{Entries: entries})
 }
 
 func parsePositiveInt(s string, fallback, max int) int {

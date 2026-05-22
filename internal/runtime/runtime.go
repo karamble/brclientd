@@ -59,16 +59,14 @@ func Run(ctx context.Context, cfg Config) error {
 	// identity check below, because the pre-setup endpoint claims port
 	// 7676 in the no-identity case and would conflict with an early
 	// clientrpc bind.
-	g.Go(func() error {
-		srv := &StatusServer{
-			Log:     cfg.LogFn("STAT"),
-			Certs:   cfg.Certs,
-			Listen:  cfg.StatusListen,
-			Tracker: tracker,
-			DB:      cfg.DB,
-		}
-		return srv.Run(gctx)
-	})
+	statusSrv := &StatusServer{
+		Log:     cfg.LogFn("STAT"),
+		Certs:   cfg.Certs,
+		Listen:  cfg.StatusListen,
+		Tracker: tracker,
+		DB:      cfg.DB,
+	}
+	g.Go(func() error { return statusSrv.Run(gctx) })
 
 	if err := waitForDcrlndUnlocked(gctx, cfg.DcrlndPay, tracker, cfg.LogFn("LNGT")); err != nil {
 		return err
@@ -90,6 +88,7 @@ func Run(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return err
 	}
+	statusSrv.SetClient(c)
 
 	g.Go(func() error {
 		err := c.Run(gctx)
