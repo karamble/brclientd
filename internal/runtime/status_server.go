@@ -9,13 +9,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/companyzero/bisonrelay/client"
 	"github.com/companyzero/bisonrelay/client/clientdb"
+	"github.com/companyzero/bisonrelay/client/clientintf"
 	"github.com/companyzero/bisonrelay/zkidentity"
 	"github.com/decred/slog"
 
@@ -63,6 +66,7 @@ func (s *StatusServer) Run(ctx context.Context) error {
 	mux.HandleFunc("/status", s.handleStatus)
 	mux.HandleFunc("/history/pm", s.handleHistoryPM)
 	mux.HandleFunc("/contacts", s.handleContacts)
+	mux.HandleFunc("/invites/redeem-key", s.handleRedeemPaidInvite)
 
 	srv := &http.Server{
 		Addr:              s.Listen,
@@ -176,6 +180,53 @@ func (s *StatusServer) handleContacts(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(struct {
 		Entries []*clientdb.AddressBookEntry `json:"entries"`
 	}{Entries: entries})
+}
+
+// handleRedeemPaidInvite accepts a bech32-encoded PaidInviteKey ("brpik1..."),
+// fetches the encrypted invite blob from the BR server, decrypts it, and
+// runs AcceptInvite to start a key exchange. The bridge between brpik1 keys
+// and BR's clientrpc ChatService.AcceptInvite RPC, which only accepts the
+// binary OOB invite blob.
+func (s *StatusServer) handleRedeemPaidInvite(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	c := s.currentClient()
+	if c == nil {
+		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
+		return
+	}
+	var req struct {
+		Key string `json:"key"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	req.Key = strings.TrimSpace(req.Key)
+	if req.Key == "" {
+		http.Error(w, "key is required", http.StatusBadRequest)
+		return
+	}
+	var pik clientintf.PaidInviteKey
+	if err := pik.Decode(req.Key); err != nil {
+		http.Error(w, "decode paid invite key: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	fetchCtx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+	invite, err := c.FetchPrepaidInvite(fetchCtx, pik, io.Discard)
+	if err != nil {
+		http.Error(w, "fetch prepaid invite: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	if err := c.AcceptInvite(invite); err != nil {
+		http.Error(w, "accept invite: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func parsePositiveInt(s string, fallback, max int) int {
