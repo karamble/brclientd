@@ -94,8 +94,6 @@ github.com/cockroachdb/errors v1.2.4 h1:Lap807SXTH5tri2TivECb/4abUkMZC9zRoLarvcK
 github.com/cockroachdb/errors v1.2.4/go.mod h1:rQD95gz6FARkaKkQXUksEje/d9a6wBJoCr5oaCLELYA=
 github.com/cockroachdb/logtags v0.0.0-20190617123548-eb05cc24525f h1:o/kfcElHqOiXqcou5a3rIlMc7oJbMQkeLk0VQJ7zgqY=
 github.com/cockroachdb/logtags v0.0.0-20190617123548-eb05cc24525f/go.mod h1:i/u985jwjWRlyHXQbwatDASoW0RMlZ/3i9yJHE2xLkI=
-github.com/companyzero/bisonrelay v0.2.4 h1:fI2a2Sju94Jj9Dipe7JGhgquiUsHdqkLyQUk0rhrFf0=
-github.com/companyzero/bisonrelay v0.2.4/go.mod h1:Mub+FRhEukMyRFrrUjPhDKlIisWYEA6xvmtQhcXAlPs=
 github.com/companyzero/gopus v0.0.1 h1:u84EXF3lZiWjUsKmf+0mShxsQF7dgZmkrlTAuoNjTOE=
 github.com/companyzero/gopus v0.0.1/go.mod h1:omndjAm61XYmtKSyBe3ulvpUNIEBwJazewUIVagmd9E=
 github.com/companyzero/sntrup4591761 v0.0.0-20220309191932-9e0f3af2f07a h1:clYxJ3Os0EQUKDDVU8M0oipllX0EkuFNBfhVQuIfyF0=
@@ -411,6 +409,8 @@ github.com/juju/qthttptest v0.0.1/go.mod h1://LCf/Ls22/rPw2u1yWukUJvYtfPY4nYpWUl
 github.com/juju/schema v1.0.0/go.mod h1:Y+ThzXpUJ0E7NYYocAbuvJ7vTivXfrof/IfRPq/0abI=
 github.com/juju/webbrowser v0.0.0-20160309143629-54b8c57083b4/go.mod h1:G6PCelgkM6cuvyD10iYJsjLBsSadVXtJ+nBxFAxE2BU=
 github.com/julienschmidt/httprouter v1.2.0/go.mod h1:SYymIcj16QtmaHHD7aYtjjsJG7VTCxuUUipMqKk8s4w=
+github.com/karamble/bisonrelay v0.0.0-20260523194908-7c5686d92657 h1:d1Fl0EVdRw8CDZ6zjj/fls3PJ+C3liyko6TGnAhTx+M=
+github.com/karamble/bisonrelay v0.0.0-20260523194908-7c5686d92657/go.mod h1:Mub+FRhEukMyRFrrUjPhDKlIisWYEA6xvmtQhcXAlPs=
 github.com/kisielk/errcheck v1.5.0/go.mod h1:pFxgyoBC7bSaBwPgfKdkLd5X25qrDl4LWUI2bnpBCr8=
 github.com/kisielk/gotool v1.0.0/go.mod h1:XhKaO+MFFWcvkIS/tQcRk01m1F5IRFswLeQ+oQHNcck=
 github.com/kkdai/bstream v1.0.0 h1:Se5gHwgp2VT2uHfDrkbbgbgEvV9cimLELwrPJctSjg8=

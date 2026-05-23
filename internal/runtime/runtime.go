@@ -55,6 +55,7 @@ type Config struct {
 func Run(ctx context.Context, cfg Config) error {
 	tracker := NewTracker(cfg.Log)
 	notifs := newNotifBus()
+	audioRouter := NewRTDTAudioRouter(cfg.LogFn("RTAU"))
 
 	g, gctx := errgroup.WithContext(ctx)
 
@@ -65,13 +66,14 @@ func Run(ctx context.Context, cfg Config) error {
 	// 7676 in the no-identity case and would conflict with an early
 	// clientrpc bind.
 	statusSrv := &StatusServer{
-		Log:       cfg.LogFn("STAT"),
-		Certs:     cfg.Certs,
-		Listen:    cfg.StatusListen,
-		Tracker:   tracker,
-		DB:        cfg.DB,
-		UploadDir: cfg.UploadDir,
-		Notifs:    notifs,
+		Log:         cfg.LogFn("STAT"),
+		Certs:       cfg.Certs,
+		Listen:      cfg.StatusListen,
+		Tracker:     tracker,
+		DB:          cfg.DB,
+		UploadDir:   cfg.UploadDir,
+		Notifs:      notifs,
+		AudioRouter: audioRouter,
 	}
 	g.Go(func() error { return statusSrv.Run(gctx) })
 
@@ -102,6 +104,7 @@ func Run(ctx context.Context, cfg Config) error {
 		SeederCachePath: cfg.SeederCachePath,
 		Tracker:         tracker,
 		Notifs:          notifs,
+		AudioRouter:     audioRouter,
 		LogFn:           cfg.LogFn,
 		IdentityChan:    identityChan,
 	})

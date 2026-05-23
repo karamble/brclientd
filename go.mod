@@ -7,9 +7,16 @@ require (
 	github.com/decred/dcrd/dcrutil/v4 v4.0.2
 	github.com/decred/dcrlnd v0.7.7-0.20250507095325-b1dd23fd5d7a
 	github.com/decred/slog v1.2.0
+	github.com/gorilla/websocket v1.5.1
 	github.com/jessevdk/go-flags v1.6.1
 	github.com/jrick/logrotate v1.0.0
+	golang.org/x/sync v0.11.0
 )
+
+// Use our fork with the RTDTAudioStreamHandler / RTDTChatStreamHandler
+// Config hooks (see br-audio-hook gist in memory). Reverts to upstream
+// once the patch lands there.
+replace github.com/companyzero/bisonrelay => github.com/karamble/bisonrelay v0.0.0-20260523194908-7c5686d92657
 
 require (
 	decred.org/cspp/v2 v2.4.0 // indirect
@@ -75,7 +82,6 @@ require (
 	github.com/golang/protobuf v1.5.3 // indirect
 	github.com/golang/snappy v0.0.4 // indirect
 	github.com/google/btree v1.1.2 // indirect
-	github.com/gorilla/websocket v1.5.1 // indirect
 	github.com/grpc-ecosystem/go-grpc-middleware v1.4.0 // indirect
 	github.com/grpc-ecosystem/go-grpc-prometheus v1.2.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway v1.16.0 // indirect
@@ -141,7 +147,6 @@ require (
 	golang.org/x/exp v0.0.0-20231110203233-9a3e6036ecaa // indirect
 	golang.org/x/mod v0.18.0 // indirect
 	golang.org/x/net v0.28.0 // indirect
-	golang.org/x/sync v0.11.0 // indirect
 	golang.org/x/sys v0.30.0 // indirect
 	golang.org/x/text v0.22.0 // indirect
 	golang.org/x/time v0.3.0 // indirect

@@ -16,6 +16,7 @@ import (
 	"github.com/companyzero/bisonrelay/client/clientdb"
 	"github.com/companyzero/bisonrelay/client/clientintf"
 	"github.com/companyzero/bisonrelay/rpc"
+	rtdtclient "github.com/companyzero/bisonrelay/rtdt/client"
 	"github.com/companyzero/bisonrelay/zkidentity"
 	"github.com/decred/slog"
 )
@@ -31,6 +32,7 @@ type BRClientCfg struct {
 	SeederCachePath string
 	Tracker         *Tracker
 	Notifs          *notifBus
+	AudioRouter     *RTDTAudioRouter
 	LogFn           func(subsys string) slog.Logger
 	IdentityChan    <-chan *zkidentity.FullIdentity
 }
@@ -405,12 +407,244 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 		}
 	}))
 
+	// ---- RTDT realtime-voice notifications ----
+	// 20 OnRTDT* hooks are registered here. Each republishes a typed event
+	// onto the notif bus so the dashboard's existing event consumer can
+	// react. Naming convention: "rtdt-<kebab-case-source>". Payload uses
+	// stringified ShortIDs / UserIDs / RTDTPeerIDs so JSON round-trips
+	// cleanly to the browser.
+	if cfg.Notifs != nil {
+		notifs := cfg.Notifs
+
+		ntfns.Register(client.OnInvitedToRTDTSession(func(ru *client.RemoteUser, sess *rpc.RMRTDTSessionInvite, ts time.Time) {
+			notifs.Publish(NotifEvent{
+				Type:      "rtdt-invited",
+				Timestamp: ts,
+				Payload: map[string]any{
+					"inviter":     ru.ID().String(),
+					"inviterNick": ru.Nick(),
+					"sessRV":      sess.RV.String(),
+					"size":        sess.Size,
+					"description": sess.Description,
+					"asPublisher": sess.AllowedAsPublisher,
+					"peerID":      uint32(sess.PeerID),
+					"isInstant":   sess.IsInstant,
+				},
+			})
+		}))
+		ntfns.Register(client.OnRTDTSessionInviteAccepted(func(ru *client.RemoteUser, sessID zkidentity.ShortID, asPublisher bool) {
+			notifs.Publish(NotifEvent{
+				Type: "rtdt-invite-accepted",
+				Payload: map[string]any{
+					"acceptor":     ru.ID().String(),
+					"acceptorNick": ru.Nick(),
+					"sessRV":       sessID.String(),
+					"asPublisher":  asPublisher,
+				},
+			})
+		}))
+		ntfns.Register(client.OnRTDTSessionInviteCanceled(func(ru *client.RemoteUser, sessID zkidentity.ShortID) {
+			notifs.Publish(NotifEvent{
+				Type: "rtdt-invite-canceled",
+				Payload: map[string]any{
+					"by":     ru.ID().String(),
+					"byNick": ru.Nick(),
+					"sessRV": sessID.String(),
+				},
+			})
+		}))
+		ntfns.Register(client.OnRTDTSesssionUpdated(func(ru *client.RemoteUser, update *client.RTDTSessionUpdateNtfn) {
+			notifs.Publish(NotifEvent{
+				Type: "rtdt-session-updated",
+				Payload: map[string]any{
+					"by":              ru.ID().String(),
+					"byNick":          ru.Nick(),
+					"sessRV":          update.SessionRV.String(),
+					"initialJoin":     update.InitialJoin,
+					"addedPublishers": len(update.NewPublishers),
+					"removedPubs":     len(update.RemovedPublishers),
+				},
+			})
+		}))
+		ntfns.Register(client.OnRTDTLiveSessionJoined(func(sessRV zkidentity.ShortID) {
+			notifs.Publish(NotifEvent{
+				Type:    "rtdt-live-joined",
+				Payload: map[string]any{"sessRV": sessRV.String()},
+			})
+		}))
+		ntfns.Register(client.OnRTDTRefreshedSessionAllowance(func(sessRV zkidentity.ShortID, addAllowance uint64) {
+			notifs.Publish(NotifEvent{
+				Type: "rtdt-allowance-refreshed",
+				Payload: map[string]any{
+					"sessRV":       sessRV.String(),
+					"addAllowance": addAllowance,
+				},
+			})
+		}))
+		ntfns.Register(client.OnRTDTLivePeerJoined(func(sessRV zkidentity.ShortID, peerID rpc.RTDTPeerID) {
+			notifs.Publish(NotifEvent{
+				Type: "rtdt-peer-joined",
+				Payload: map[string]any{
+					"sessRV": sessRV.String(),
+					"peerID": uint32(peerID),
+				},
+			})
+		}))
+		ntfns.Register(client.OnRTDTLivePeerStalled(func(sessRV zkidentity.ShortID, peerID rpc.RTDTPeerID) {
+			notifs.Publish(NotifEvent{
+				Type: "rtdt-peer-stalled",
+				Payload: map[string]any{
+					"sessRV": sessRV.String(),
+					"peerID": uint32(peerID),
+				},
+			})
+		}))
+		ntfns.Register(client.OnRTDTLiveSessionSendErrored(func(sessRV zkidentity.ShortID, err error) {
+			msg := ""
+			if err != nil {
+				msg = err.Error()
+			}
+			notifs.Publish(NotifEvent{
+				Type: "rtdt-send-error",
+				Payload: map[string]any{
+					"sessRV": sessRV.String(),
+					"error":  msg,
+				},
+			})
+		}))
+		ntfns.Register(client.OnRTDTRemadeLiveSessionHotAudio(func(sessRV zkidentity.ShortID) {
+			notifs.Publish(NotifEvent{
+				Type:    "rtdt-hot-audio",
+				Payload: map[string]any{"sessRV": sessRV.String()},
+			})
+		}))
+		ntfns.Register(client.OnRTDTPeerSoundChanged(func(sessRV zkidentity.ShortID, peerID rpc.RTDTPeerID, hasSoundStream, hasSound bool) {
+			notifs.Publish(NotifEvent{
+				Type: "rtdt-peer-sound-changed",
+				Payload: map[string]any{
+					"sessRV":         sessRV.String(),
+					"peerID":         uint32(peerID),
+					"hasSoundStream": hasSoundStream,
+					"hasSound":       hasSound,
+				},
+			})
+		}))
+		ntfns.Register(client.OnRTDTPeerExitedSession(func(ru *client.RemoteUser, sessRV zkidentity.ShortID, peerID rpc.RTDTPeerID) {
+			notifs.Publish(NotifEvent{
+				Type: "rtdt-peer-exited",
+				Payload: map[string]any{
+					"by":     ru.ID().String(),
+					"byNick": ru.Nick(),
+					"sessRV": sessRV.String(),
+					"peerID": uint32(peerID),
+				},
+			})
+		}))
+		ntfns.Register(client.OnRTDTKickedFromLiveSession(func(sessRV zkidentity.ShortID, peerID rpc.RTDTPeerID, banDuration time.Duration) {
+			notifs.Publish(NotifEvent{
+				Type: "rtdt-kicked",
+				Payload: map[string]any{
+					"sessRV":     sessRV.String(),
+					"peerID":     uint32(peerID),
+					"banSeconds": int64(banDuration.Seconds()),
+				},
+			})
+		}))
+		ntfns.Register(client.OnRTDTSessionDissolved(func(ru *client.RemoteUser, sessRV zkidentity.ShortID, peerID rpc.RTDTPeerID) {
+			notifs.Publish(NotifEvent{
+				Type: "rtdt-dissolved",
+				Payload: map[string]any{
+					"by":     ru.ID().String(),
+					"byNick": ru.Nick(),
+					"sessRV": sessRV.String(),
+					"peerID": uint32(peerID),
+				},
+			})
+		}))
+		ntfns.Register(client.OnRTDTRemovedFromSession(func(ru *client.RemoteUser, sessRV zkidentity.ShortID, reason string) {
+			notifs.Publish(NotifEvent{
+				Type: "rtdt-removed",
+				Payload: map[string]any{
+					"by":     ru.ID().String(),
+					"byNick": ru.Nick(),
+					"sessRV": sessRV.String(),
+					"reason": reason,
+				},
+			})
+		}))
+		ntfns.Register(client.OnRTDTRotatedCookie(func(ru *client.RemoteUser, sessRV zkidentity.ShortID) {
+			notifs.Publish(NotifEvent{
+				Type: "rtdt-cookies-rotated",
+				Payload: map[string]any{
+					"by":     ru.ID().String(),
+					"byNick": ru.Nick(),
+					"sessRV": sessRV.String(),
+				},
+			})
+		}))
+		ntfns.Register(client.OnRTDTChatMessageReceived(func(sessRV zkidentity.ShortID, pub rpc.RMRTDTSessionPublisher, msg string, ts uint32) {
+			notifs.Publish(NotifEvent{
+				Type: "rtdt-chat",
+				Payload: map[string]any{
+					"sessRV":  sessRV.String(),
+					"peerID":  uint32(pub.PeerID),
+					"message": msg,
+					"ts":      ts,
+				},
+			})
+		}))
+		ntfns.Register(client.OnRTDTAdminCookiesReceived(func(ru *client.RemoteUser, sessRV zkidentity.ShortID) {
+			notifs.Publish(NotifEvent{
+				Type: "rtdt-admin-cookies",
+				Payload: map[string]any{
+					"by":     ru.ID().String(),
+					"byNick": ru.Nick(),
+					"sessRV": sessRV.String(),
+				},
+			})
+		}))
+		ntfns.Register(client.OnRTDTRTTCalculated(func(addr net.UDPAddr, rtt time.Duration) {
+			notifs.Publish(NotifEvent{
+				Type: "rtdt-rtt",
+				Payload: map[string]any{
+					"addr":  addr.String(),
+					"rttNs": rtt.Nanoseconds(),
+				},
+			})
+		}))
+		ntfns.Register(client.OnRTDTJoinedInstantCall(func(sessRV zkidentity.ShortID) {
+			notifs.Publish(NotifEvent{
+				Type:    "rtdt-joined-instant-call",
+				Payload: map[string]any{"sessRV": sessRV.String()},
+			})
+		}))
+	}
+
+	// Audio handler: when a sink is registered for the session (Phase 3 WS
+	// endpoint does this), forward the decrypted Opus packet to it.
+	// Otherwise the router drops + counts the frame. Without this hook
+	// stock BR would route audio into c.noterec which is a malgo native
+	// device that does not exist in our container.
+	var audioHandler rtdtclient.StreamHandler
+	if cfg.AudioRouter != nil {
+		router := cfg.AudioRouter
+		audioHandler = func(sess *rtdtclient.Session, enc *rpc.RTDTFramedPacket, plain *rpc.RTDTDataPacket) error {
+			rv := sess.RV()
+			if rv == nil {
+				return nil
+			}
+			router.Dispatch(*rv, enc.Source, plain.Data, plain.Timestamp)
+			return nil
+		}
+	}
+
 	brCfg := client.Config{
-		DB:            cfg.DB,
-		PayClient:     cfg.DcrlndPay,
-		Dialer:        dialer,
-		Notifications: ntfns,
-		Logger:        cfg.LogFn,
+		DB:                     cfg.DB,
+		PayClient:              cfg.DcrlndPay,
+		Dialer:                 dialer,
+		Notifications:          ntfns,
+		Logger:                 cfg.LogFn,
+		RTDTAudioStreamHandler: audioHandler,
 
 		LocalIDIniter: func(ctx context.Context) (*zkidentity.FullIdentity, error) {
 			select {

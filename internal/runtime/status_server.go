@@ -34,13 +34,14 @@ import (
 // /history/pm for paginated PM history reads (a wire-exposed wrapper around
 // clientdb.ReadLogPM since BR's clientrpc.proto has no history RPC).
 type StatusServer struct {
-	Log       slog.Logger
-	Certs     certgen.Triplet
-	Listen    string
-	Tracker   *Tracker
-	DB        *clientdb.DB
-	UploadDir string
-	Notifs    *notifBus
+	Log         slog.Logger
+	Certs       certgen.Triplet
+	Listen      string
+	Tracker     *Tracker
+	DB          *clientdb.DB
+	UploadDir   string
+	Notifs      *notifBus
+	AudioRouter *RTDTAudioRouter
 
 	clientMu sync.RWMutex
 	client   *client.Client
@@ -101,6 +102,8 @@ func (s *StatusServer) Run(ctx context.Context) error {
 	mux.HandleFunc("/stats/network", s.handleStatsNetwork)
 	mux.HandleFunc("/stats/contacts", s.handleStatsContacts)
 	mux.HandleFunc("/stats/posts", s.handleStatsPosts)
+	mux.HandleFunc("/rtdt/sessions", s.handleRTDT)
+	mux.HandleFunc("/rtdt/sessions/", s.handleRTDT)
 
 	srv := &http.Server{
 		Addr:              s.Listen,
