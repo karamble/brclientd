@@ -78,6 +78,7 @@ func (s *StatusServer) Run(ctx context.Context) error {
 	mux.HandleFunc("/contacts/accept-suggestion", s.handleAcceptSuggestion)
 	mux.HandleFunc("/contacts/subscribe-posts", s.handleSubscribePosts)
 	mux.HandleFunc("/contacts/unsubscribe-posts", s.handleUnsubscribePosts)
+	mux.HandleFunc("/contacts/list-posts", s.handleListPosts)
 	mux.HandleFunc("/notifications", s.handleNotifications)
 	mux.HandleFunc("/invites/redeem-key", s.handleRedeemPaidInvite)
 	mux.HandleFunc("/files/send", s.handleSendFile)
@@ -419,6 +420,26 @@ func (s *StatusServer) handleSubscribePosts(w http.ResponseWriter, r *http.Reque
 	}
 	if err := c.SubscribeToPosts(uid); err != nil {
 		http.Error(w, "subscribe to posts: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleListPosts asks the remote user to send the list of posts they
+// have authored. Async: the response arrives via OnPostsListReceived and
+// is published as a posts-list-received event for subscribers.
+func (s *StatusServer) handleListPosts(w http.ResponseWriter, r *http.Request) {
+	uid, ok := s.decodeUIDOnlyBody(w, r)
+	if !ok {
+		return
+	}
+	c := s.currentClient()
+	if c == nil {
+		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
+		return
+	}
+	if err := c.ListUserPosts(uid); err != nil {
+		http.Error(w, "list user posts: "+err.Error(), http.StatusBadGateway)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

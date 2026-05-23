@@ -15,6 +15,7 @@ import (
 	"github.com/companyzero/bisonrelay/client"
 	"github.com/companyzero/bisonrelay/client/clientdb"
 	"github.com/companyzero/bisonrelay/client/clientintf"
+	"github.com/companyzero/bisonrelay/rpc"
 	"github.com/companyzero/bisonrelay/zkidentity"
 	"github.com/decred/slog"
 )
@@ -124,6 +125,33 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 					"uid":  uid.String(),
 					"nick": ruNick,
 					"line": line,
+				},
+			})
+		}
+	}))
+
+	// OnPostsListReceived fires when a remote user replies to our
+	// ListUserPosts request with their post-list. We forward the list
+	// verbatim to subscribers; the dashboard's modal hydrates from this.
+	ntfns.Register(client.OnPostsListReceived(func(ru *client.RemoteUser, postList rpc.RMListPostsReply) {
+		uid := ru.ID()
+		nick := ru.Nick()
+		posts := make([]map[string]any, 0, len(postList.Posts))
+		for _, p := range postList.Posts {
+			posts = append(posts, map[string]any{
+				"id":        p.ID.String(),
+				"title":     p.Title,
+				"timestamp": p.Timestamp,
+			})
+		}
+		nlog.Infof("Received %d posts from %s", len(posts), nick)
+		if cfg.Notifs != nil {
+			cfg.Notifs.Publish(NotifEvent{
+				Type: "posts-list-received",
+				Payload: map[string]any{
+					"uid":   uid.String(),
+					"nick":  nick,
+					"posts": posts,
 				},
 			})
 		}
