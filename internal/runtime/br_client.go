@@ -130,6 +130,72 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 		}
 	}))
 
+	// OnPostRcvdNtfn fires when a subscribed-to user publishes a new
+	// post and we receive it. Forward a lightweight summary so the
+	// Feed tab can prepend a card and fetch the body on demand.
+	ntfns.Register(client.OnPostRcvdNtfn(func(ru *client.RemoteUser, summary clientdb.PostSummary, _ rpc.PostMetadata) {
+		nick := ru.Nick()
+		nlog.Infof("Received post %s from %s", summary.ID, nick)
+		if cfg.Notifs != nil {
+			cfg.Notifs.Publish(NotifEvent{
+				Type: "post-received",
+				Payload: map[string]any{
+					"id":          summary.ID.String(),
+					"from":        summary.From.String(),
+					"author_id":   summary.AuthorID.String(),
+					"author_nick": summary.AuthorNick,
+					"date":        summary.Date.Unix(),
+					"title":       summary.Title,
+				},
+			})
+		}
+	}))
+
+	// OnContentListReceived fires when a remote user replies to our
+	// ListUserContent request with the files they have shared. Forwarded
+	// verbatim to subscribers; the dashboard's modal hydrates from this.
+	ntfns.Register(client.OnContentListReceived(func(ru *client.RemoteUser, files []clientdb.RemoteFile, listErr error) {
+		uid := ru.ID()
+		nick := ru.Nick()
+		if listErr != nil {
+			nlog.Warnf("Content list from %s failed: %v", nick, listErr)
+			if cfg.Notifs != nil {
+				cfg.Notifs.Publish(NotifEvent{
+					Type: "content-list-received",
+					Payload: map[string]any{
+						"uid":   uid.String(),
+						"nick":  nick,
+						"error": listErr.Error(),
+					},
+				})
+			}
+			return
+		}
+		out := make([]map[string]any, 0, len(files))
+		for _, f := range files {
+			out = append(out, map[string]any{
+				"file_id":     f.FID.String(),
+				"filename":    f.Metadata.Filename,
+				"size":        f.Metadata.Size,
+				"directory":   f.Metadata.Directory,
+				"description": f.Metadata.Description,
+				"cost":        f.Metadata.Cost,
+				"downloaded":  f.DiskPath != "",
+			})
+		}
+		nlog.Infof("Received %d shared files from %s", len(out), nick)
+		if cfg.Notifs != nil {
+			cfg.Notifs.Publish(NotifEvent{
+				Type: "content-list-received",
+				Payload: map[string]any{
+					"uid":   uid.String(),
+					"nick":  nick,
+					"files": out,
+				},
+			})
+		}
+	}))
+
 	// OnPostsListReceived fires when a remote user replies to our
 	// ListUserPosts request with their post-list. We forward the list
 	// verbatim to subscribers; the dashboard's modal hydrates from this.

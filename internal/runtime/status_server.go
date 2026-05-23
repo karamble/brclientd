@@ -79,6 +79,10 @@ func (s *StatusServer) Run(ctx context.Context) error {
 	mux.HandleFunc("/contacts/subscribe-posts", s.handleSubscribePosts)
 	mux.HandleFunc("/contacts/unsubscribe-posts", s.handleUnsubscribePosts)
 	mux.HandleFunc("/contacts/list-posts", s.handleListPosts)
+	mux.HandleFunc("/contacts/list-content", s.handleListContent)
+	mux.HandleFunc("/contacts/fetch-post", s.handleFetchPost)
+	mux.HandleFunc("/posts/feed", s.handlePostsFeed)
+	mux.HandleFunc("/posts/body", s.handlePostBody)
 	mux.HandleFunc("/notifications", s.handleNotifications)
 	mux.HandleFunc("/invites/redeem-key", s.handleRedeemPaidInvite)
 	mux.HandleFunc("/files/send", s.handleSendFile)
@@ -445,6 +449,27 @@ func (s *StatusServer) handleListPosts(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handleListContent asks the remote user to send the list of files they
+// have shared. Lists both global and local-shared directories. Async: the
+// response arrives via OnContentListReceived and is published as a
+// content-list-received event for subscribers.
+func (s *StatusServer) handleListContent(w http.ResponseWriter, r *http.Request) {
+	uid, ok := s.decodeUIDOnlyBody(w, r)
+	if !ok {
+		return
+	}
+	c := s.currentClient()
+	if c == nil {
+		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
+		return
+	}
+	if err := c.ListUserContent(uid, []string{"*"}, ""); err != nil {
+		http.Error(w, "list user content: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // handleUnsubscribePosts asks the remote user to stop sending posts. As
 // with subscribe, this is asynchronous and the new state surfaces via
 // OnRemoteSubscriptionChanged.
@@ -463,6 +488,159 @@ func (s *StatusServer) handleUnsubscribePosts(w http.ResponseWriter, r *http.Req
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleFetchPost asks the remote user for a specific post. BR has two
+// paths and we have to pick the right one based on our subscription
+// state with the author:
+//
+//   - When NOT already subscribed: SubscribeToPostsAndFetch sends an
+//     RMPostsSubscribe with GetPost set. The remote, on first-subscribe,
+//     returns the post inline with the subscribe reply.
+//   - When ALREADY subscribed: the same SubscribeToPostsAndFetch call
+//     is a no-op at the remote side because their handlePostsSubscribe
+//     short-circuits on ErrAlreadySubscribed and skips sending the post
+//     (client_posts.go:57). The post never arrives. We have to call
+//     GetUserPost instead, which sends a standalone RMGetPost.
+//
+// Either way, the post body arrives via OnPostRcvdNtfn which feeds the
+// local feed cache and fires the post-received live event.
+func (s *StatusServer) handleFetchPost(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	c := s.currentClient()
+	if c == nil {
+		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
+		return
+	}
+	var req struct {
+		UID string `json:"uid"`
+		PID string `json:"pid"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	uid, ok := parseUIDHex(w, "uid", req.UID)
+	if !ok {
+		return
+	}
+	var pid zkidentity.ShortID
+	if err := pid.FromString(req.PID); err != nil {
+		http.Error(w, "invalid pid: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	subs, err := c.ListPostSubscriptions()
+	if err != nil {
+		http.Error(w, "list post subscriptions: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	subscribed := false
+	for _, sub := range subs {
+		if sub.To == uid {
+			subscribed = true
+			break
+		}
+	}
+	if subscribed {
+		if err := c.GetUserPost(uid, pid, false); err != nil {
+			http.Error(w, "get user post: "+err.Error(), http.StatusBadGateway)
+			return
+		}
+	} else {
+		if err := c.SubscribeToPostsAndFetch(uid, pid); err != nil {
+			http.Error(w, "subscribe + fetch post: "+err.Error(), http.StatusBadGateway)
+			return
+		}
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handlePostsFeed returns the local list of all posts (received from
+// subscribed users + ours). Lightweight summaries only — bodies are
+// fetched on demand via /posts/body.
+func (s *StatusServer) handlePostsFeed(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	c := s.currentClient()
+	if c == nil {
+		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
+		return
+	}
+	posts, err := c.ListPosts()
+	if err != nil {
+		http.Error(w, "list posts: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	type postSummary struct {
+		ID           string `json:"id"`
+		From         string `json:"from"`
+		AuthorID     string `json:"author_id"`
+		AuthorNick   string `json:"author_nick"`
+		Date         int64  `json:"date"`
+		LastStatusTS int64  `json:"last_status_ts"`
+		Title        string `json:"title"`
+	}
+	out := make([]postSummary, 0, len(posts))
+	for _, p := range posts {
+		out = append(out, postSummary{
+			ID:           p.ID.String(),
+			From:         p.From.String(),
+			AuthorID:     p.AuthorID.String(),
+			AuthorNick:   p.AuthorNick,
+			Date:         p.Date.Unix(),
+			LastStatusTS: p.LastStatusTS.Unix(),
+			Title:        p.Title,
+		})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(struct {
+		Posts []postSummary `json:"posts"`
+	}{Posts: out})
+}
+
+// handlePostBody returns the full PostMetadata for the requested
+// (author, post) pair. ?uid=<hex>&pid=<hex>.
+func (s *StatusServer) handlePostBody(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	c := s.currentClient()
+	if c == nil {
+		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
+		return
+	}
+	uidStr := strings.TrimSpace(r.URL.Query().Get("uid"))
+	pidStr := strings.TrimSpace(r.URL.Query().Get("pid"))
+	if uidStr == "" || pidStr == "" {
+		http.Error(w, "uid and pid query params are required", http.StatusBadRequest)
+		return
+	}
+	var uid zkidentity.ShortID
+	if err := uid.FromString(uidStr); err != nil {
+		http.Error(w, "invalid uid: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	var pid zkidentity.ShortID
+	if err := pid.FromString(pidStr); err != nil {
+		http.Error(w, "invalid pid: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	pm, err := c.ReadPost(uid, pid)
+	if err != nil {
+		http.Error(w, "read post: "+err.Error(), http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	// PostMetadata.Attributes carries the markdown body under the
+	// "main" key (per BR's convention). We pass the whole map through
+	// so the dashboard can pick out what it needs.
+	_ = json.NewEncoder(w).Encode(pm)
 }
 
 // handleNotifications streams JSONL events from the in-process notif bus to
