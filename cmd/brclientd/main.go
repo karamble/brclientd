@@ -88,6 +88,7 @@ func run(args []string) error {
 		DcrlndRPCHost:     cfg.Dcrlnd.RPCHost,
 		ReplayMsgLogsRoot: filepath.Join(cfg.DataDir, "replaymsglog"),
 		UploadDir:         filepath.Join(cfg.DataDir, "uploads"),
+		SeederCachePath:   filepath.Join(cfg.DataDir, "seeder-cache.json"),
 	})
 	if err != nil && !errors.Is(err, context.Canceled) {
 		return err

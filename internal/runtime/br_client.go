@@ -22,12 +22,13 @@ import (
 // PaymentClient interface) so the CheckServerSession closure can hand its
 // LNRPC into CheckLNWalletUsable.
 type BRClientCfg struct {
-	DB           *clientdb.DB
-	DcrlndPay    *client.DcrlnPaymentClient
-	BRServer     string
-	Tracker      *Tracker
-	LogFn        func(subsys string) slog.Logger
-	IdentityChan <-chan *zkidentity.FullIdentity
+	DB              *clientdb.DB
+	DcrlndPay       *client.DcrlnPaymentClient
+	BRServer        string
+	SeederCachePath string
+	Tracker         *Tracker
+	LogFn           func(subsys string) slog.Logger
+	IdentityChan    <-chan *zkidentity.FullIdentity
 }
 
 // startBRClient builds the BR client config, instantiates the client, and
@@ -37,10 +38,12 @@ type BRClientCfg struct {
 func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 	// bisonrelay.org:443 is a seeder that points at the actual BR relay
 	// server; the relay serves a single self-signed cert that BR's inner
-	// dialer pins. WithDialer would TLS-handshake the seeder directly and
-	// reject its public-CA-issued chain.
+	// dialer pins. cachedSeederDialer is a drop-in replacement for
+	// clientintf.WithSeeder that caches the resolved server address so BR's
+	// connKeeper does not hammer the seeder on every reconnect attempt when
+	// the BR server is briefly unreachable.
 	netDialer := &net.Dialer{}
-	dialer := clientintf.WithSeeder(cfg.BRServer, cfg.LogFn("CONN"), netDialer.DialContext)
+	dialer := cachedSeederDialer(cfg.BRServer, cfg.LogFn("CONN"), netDialer.DialContext, cfg.SeederCachePath)
 
 	ntfns := client.NewNotificationManager()
 	ntfns.Register(client.OnServerSessionChangedNtfn(func(connected bool, _ clientintf.ServerPolicy) {

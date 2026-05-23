@@ -44,6 +44,7 @@ type Config struct {
 	DcrlndRPCHost     string
 	ReplayMsgLogsRoot string
 	UploadDir         string
+	SeederCachePath   string
 }
 
 // Run brings up the /status HTTP server and clientrpc.VersionService
@@ -93,12 +94,13 @@ func Run(ctx context.Context, cfg Config) error {
 	identityChan := make(chan *zkidentity.FullIdentity, 1)
 
 	c, err := startBRClient(BRClientCfg{
-		DB:           cfg.DB,
-		DcrlndPay:    dcrlndPay,
-		BRServer:     cfg.BRServer,
-		Tracker:      tracker,
-		LogFn:        cfg.LogFn,
-		IdentityChan: identityChan,
+		DB:              cfg.DB,
+		DcrlndPay:       dcrlndPay,
+		BRServer:        cfg.BRServer,
+		SeederCachePath: cfg.SeederCachePath,
+		Tracker:         tracker,
+		LogFn:           cfg.LogFn,
+		IdentityChan:    identityChan,
 	})
 	if err != nil {
 		return err
