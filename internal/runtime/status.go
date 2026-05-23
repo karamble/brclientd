@@ -34,6 +34,10 @@ type Status struct {
 	RecommendedPeer string    `json:"recommendedPeer,omitempty"`
 	WalletCheckErr  string    `json:"walletCheckErr,omitempty"`
 	LastUpdated     time.Time `json:"lastUpdated"`
+	// ConnectedAt is the timestamp of the last false->true transition into
+	// StageReady. Zero while disconnected. The Stats / Network view uses it
+	// to render a "connected since X" counter.
+	ConnectedAt time.Time `json:"connectedAt,omitempty"`
 }
 
 // Tracker holds the current Status with mutex protection and serves both
@@ -168,8 +172,12 @@ func (t *Tracker) SetConnected(connected bool) {
 	if connected {
 		t.status.Stage = StageReady
 		t.status.WalletCheckErr = ""
+		if t.status.ConnectedAt.IsZero() {
+			t.status.ConnectedAt = time.Now()
+		}
 	} else {
 		t.status.Stage = StageDisconnected
+		t.status.ConnectedAt = time.Time{}
 	}
 	t.status.LastUpdated = time.Now()
 	t.log.Debugf("status: connected=%v stage=%s", connected, t.status.Stage)

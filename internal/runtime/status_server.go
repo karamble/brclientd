@@ -21,6 +21,7 @@ import (
 	"github.com/companyzero/bisonrelay/client"
 	"github.com/companyzero/bisonrelay/client/clientdb"
 	"github.com/companyzero/bisonrelay/client/clientintf"
+	"github.com/companyzero/bisonrelay/client/timestats"
 	"github.com/companyzero/bisonrelay/rpc"
 	"github.com/companyzero/bisonrelay/zkidentity"
 	"github.com/decred/slog"
@@ -95,6 +96,11 @@ func (s *StatusServer) Run(ctx context.Context) error {
 	mux.HandleFunc("/notifications", s.handleNotifications)
 	mux.HandleFunc("/invites/redeem-key", s.handleRedeemPaidInvite)
 	mux.HandleFunc("/files/send", s.handleSendFile)
+	mux.HandleFunc("/stats/overview", s.handleStatsOverview)
+	mux.HandleFunc("/stats/payments", s.handleStatsPayments)
+	mux.HandleFunc("/stats/network", s.handleStatsNetwork)
+	mux.HandleFunc("/stats/contacts", s.handleStatsContacts)
+	mux.HandleFunc("/stats/posts", s.handleStatsPosts)
 
 	srv := &http.Server{
 		Addr:              s.Listen,
@@ -1370,4 +1376,401 @@ func parseNonNegativeInt(s string, fallback int) int {
 		return fallback
 	}
 	return v
+}
+
+// ----- /stats handlers ---------------------------------------------------
+
+type quantileOut struct {
+	Rel   string `json:"rel"`
+	N     int64  `json:"n"`
+	MaxNs int64  `json:"max_ns"`
+}
+
+func toQuantileOut(qs []timestats.Quantile) []quantileOut {
+	out := make([]quantileOut, len(qs))
+	for i, q := range qs {
+		out[i] = quantileOut{Rel: q.Rel, N: q.N, MaxNs: q.Max}
+	}
+	return out
+}
+
+type policyOut struct {
+	PushPayRateMAtoms    uint64 `json:"push_pay_rate_matoms"`
+	PushPayRateBytes     uint64 `json:"push_pay_rate_bytes"`
+	PushPayRateMinMAtoms uint64 `json:"push_pay_rate_min_matoms"`
+	MaxPushInvoices      int    `json:"max_push_invoices"`
+	MaxMsgSize           uint   `json:"max_msg_size"`
+	ExpirationDays       int    `json:"expiration_days"`
+}
+
+func policyFromSession(c *client.Client) policyOut {
+	sess := c.ServerSession()
+	if sess == nil {
+		return policyOut{}
+	}
+	p := sess.Policy()
+	return policyOut{
+		PushPayRateMAtoms:    p.PushPayRateMAtoms,
+		PushPayRateBytes:     p.PushPayRateBytes,
+		PushPayRateMinMAtoms: p.PushPayRateMinMAtoms,
+		MaxPushInvoices:      p.MaxPushInvoices,
+		MaxMsgSize:           p.MaxMsgSize,
+		ExpirationDays:       p.ExpirationDays,
+	}
+}
+
+type topContactOut struct {
+	UID      string `json:"uid"`
+	Nick     string `json:"nick"`
+	Sent     int64  `json:"sent_atoms"`
+	Received int64  `json:"received_atoms"`
+}
+
+// handleStatsOverview is the compact summary the Stats landing page renders
+// as hero counters + top-contacts strip + connection-health badge. All
+// figures are derived from data the BR client already has in memory, so it
+// stays cheap to refresh on a 30s tick.
+func (s *StatusServer) handleStatsOverview(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	c := s.currentClient()
+	if c == nil {
+		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
+		return
+	}
+	status := s.Tracker.Get()
+
+	contacts := c.AddressBook()
+	posts, _ := c.ListPosts()
+	authoredCount := 0
+	myID := c.PublicID()
+	for _, p := range posts {
+		if p.AuthorID == myID {
+			authoredCount++
+		}
+	}
+	subs, _ := c.ListPostSubscriptions()
+	subscribers, _ := c.ListPostSubscribers()
+
+	stats, _ := c.ListPaymentStats()
+	var sumSent, sumRecv, sumFees int64
+	for _, ps := range stats {
+		sumSent += ps.TotalSent
+		sumRecv += ps.TotalReceived
+		sumFees += ps.TotalPayFee
+	}
+
+	// Top 5 contacts by total activity (sent+received) for the leaderboard strip.
+	type rank struct {
+		uid     clientintf.UserID
+		sent    int64
+		recv    int64
+		ranking int64
+	}
+	ranks := make([]rank, 0, len(stats))
+	for uid, ps := range stats {
+		ranks = append(ranks, rank{uid: uid, sent: ps.TotalSent, recv: ps.TotalReceived,
+			ranking: ps.TotalSent + ps.TotalReceived})
+	}
+	// Simple partial sort: we want the 5 largest by ranking.
+	for i := 0; i < len(ranks); i++ {
+		for j := i + 1; j < len(ranks); j++ {
+			if ranks[j].ranking > ranks[i].ranking {
+				ranks[i], ranks[j] = ranks[j], ranks[i]
+			}
+		}
+		if i >= 5 {
+			break
+		}
+	}
+	if len(ranks) > 5 {
+		ranks = ranks[:5]
+	}
+	top := make([]topContactOut, 0, len(ranks))
+	for _, r := range ranks {
+		nick, _ := c.UserNick(r.uid)
+		top = append(top, topContactOut{
+			UID:      r.uid.String(),
+			Nick:     nick,
+			Sent:     r.sent,
+			Received: r.recv,
+		})
+	}
+
+	// RMQ p50 latency (fall back to first available quantile if no p50).
+	rmqQs := c.RMQTimingStat()
+	var p50Ns int64
+	for _, q := range rmqQs {
+		if q.Rel == "50%" {
+			p50Ns = q.Max
+			break
+		}
+	}
+	if p50Ns == 0 && len(rmqQs) > 0 {
+		p50Ns = rmqQs[0].Max
+	}
+
+	out := struct {
+		Nick             string          `json:"nick"`
+		Identity         string          `json:"identity"`
+		Stage            Stage           `json:"stage"`
+		ConnectedAt      time.Time       `json:"connected_at,omitempty"`
+		ServerNode       string          `json:"server_node,omitempty"`
+		ContactsCount    int             `json:"contacts_count"`
+		PostsAuthored    int             `json:"posts_authored"`
+		SubscriptionsCnt int             `json:"subscriptions_count"`
+		SubscribersCnt   int             `json:"subscribers_count"`
+		TotalSentAtoms   int64           `json:"total_sent_atoms"`
+		TotalRecvAtoms   int64           `json:"total_received_atoms"`
+		TotalFeesAtoms   int64           `json:"total_fees_atoms"`
+		RmqP50Ns         int64           `json:"rmq_p50_ns"`
+		TopContacts      []topContactOut `json:"top_contacts"`
+	}{
+		Nick:             status.Nick,
+		Identity:         myID.String(),
+		Stage:            status.Stage,
+		ConnectedAt:      status.ConnectedAt,
+		ServerNode:       status.ServerNode,
+		ContactsCount:    len(contacts),
+		PostsAuthored:    authoredCount,
+		SubscriptionsCnt: len(subs),
+		SubscribersCnt:   len(subscribers),
+		TotalSentAtoms:   sumSent,
+		TotalRecvAtoms:   sumRecv,
+		TotalFeesAtoms:   sumFees,
+		RmqP50Ns:         p50Ns,
+		TopContacts:      top,
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(out)
+}
+
+// handleStatsPayments returns the per-user payment table plus the per-user
+// prefix breakdowns for every user. bruig's paystats.dart shows the same
+// data but only fetches breakdowns on row click; here we ship both in one
+// shot so the dashboard can render the drawer instantly.
+func (s *StatusServer) handleStatsPayments(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	c := s.currentClient()
+	if c == nil {
+		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
+		return
+	}
+	stats, err := c.ListPaymentStats()
+	if err != nil {
+		http.Error(w, "list payment stats: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	type userRow struct {
+		UID          string                     `json:"uid"`
+		Nick         string                     `json:"nick"`
+		Sent         int64                      `json:"sent_atoms"`
+		Received     int64                      `json:"received_atoms"`
+		Fees         int64                      `json:"fees_atoms"`
+		Breakdowns   []clientdb.PayStatsSummary `json:"breakdowns,omitempty"`
+	}
+	rows := make([]userRow, 0, len(stats))
+	for uid, ps := range stats {
+		nick, _ := c.UserNick(uid)
+		summary, _ := c.SummarizeUserPayStats(uid)
+		rows = append(rows, userRow{
+			UID:        uid.String(),
+			Nick:       nick,
+			Sent:       ps.TotalSent,
+			Received:   ps.TotalReceived,
+			Fees:       ps.TotalPayFee,
+			Breakdowns: summary,
+		})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(struct {
+		Users     []userRow     `json:"users"`
+		RmqRttQs  []quantileOut `json:"rmq_rtt_quantiles"`
+	}{
+		Users:    rows,
+		RmqRttQs: toQuantileOut(c.RMQTimingStat()),
+	})
+}
+
+// handleStatsNetwork returns server-session details: server LN pubkey,
+// recommended hub, full server policy (push-pay rates, retention, max
+// message size), connection start time, and the RMQ RTT quantile histogram.
+// All of this is hidden in bruig.
+func (s *StatusServer) handleStatsNetwork(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	c := s.currentClient()
+	if c == nil {
+		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
+		return
+	}
+	status := s.Tracker.Get()
+	out := struct {
+		ServerNode      string        `json:"server_node,omitempty"`
+		RecommendedPeer string        `json:"recommended_peer,omitempty"`
+		ConnectedAt     time.Time     `json:"connected_at,omitempty"`
+		Stage           Stage         `json:"stage"`
+		Policy          policyOut     `json:"policy"`
+		RmqQuantiles    []quantileOut `json:"rmq_quantiles"`
+	}{
+		ServerNode:      status.ServerNode,
+		RecommendedPeer: status.RecommendedPeer,
+		ConnectedAt:     status.ConnectedAt,
+		Stage:           status.Stage,
+		Policy:          policyFromSession(c),
+		RmqQuantiles:    toQuantileOut(c.RMQTimingStat()),
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(out)
+}
+
+// handleStatsContacts returns per-contact metadata + ratchet debug info so
+// the Contacts tab can paint a "ratchet health" badge per row (saved-keys
+// count, will-ratchet flag, last-enc/dec ages). For non-running users (no
+// in-memory RemoteUser) we still emit the addressbook row with a zero
+// ratchet block so the UI can show "offline" rather than dropping them.
+func (s *StatusServer) handleStatsContacts(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	c := s.currentClient()
+	if c == nil {
+		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
+		return
+	}
+	type ratchetOut struct {
+		NbSavedKeys  int       `json:"nb_saved_keys"`
+		WillRatchet  bool      `json:"will_ratchet"`
+		LastEncTime  time.Time `json:"last_enc_time,omitempty"`
+		LastDecTime  time.Time `json:"last_dec_time,omitempty"`
+		SendRVPlain  string    `json:"send_rv_plain,omitempty"`
+		RecvRVPlain  string    `json:"recv_rv_plain,omitempty"`
+		DrainRVPlain string    `json:"drain_rv_plain,omitempty"`
+	}
+	type row struct {
+		UID                  string      `json:"uid"`
+		Nick                 string      `json:"nick"`
+		NickAlias            string      `json:"nick_alias,omitempty"`
+		FirstCreated         time.Time   `json:"first_created"`
+		LastCompletedKX      time.Time   `json:"last_completed_kx"`
+		LastHandshakeAttempt time.Time   `json:"last_handshake_attempt,omitempty"`
+		Ignored              bool        `json:"ignored"`
+		Ratchet              *ratchetOut `json:"ratchet,omitempty"`
+	}
+	entries := c.AddressBook()
+	out := make([]row, 0, len(entries))
+	for _, e := range entries {
+		if e.ID == nil {
+			continue
+		}
+		r := row{
+			UID:                  e.ID.Identity.String(),
+			Nick:                 e.ID.Nick,
+			NickAlias:            e.NickAlias,
+			FirstCreated:         e.FirstCreated,
+			LastCompletedKX:      e.LastCompletedKX,
+			LastHandshakeAttempt: e.LastHandshakeAttempt,
+			Ignored:              e.Ignored,
+		}
+		if ru, err := c.UserByID(e.ID.Identity); err == nil && ru != nil {
+			d := ru.RatchetDebugInfo()
+			r.Ratchet = &ratchetOut{
+				NbSavedKeys:  d.NbSavedKeys,
+				WillRatchet:  d.WillRatchet,
+				LastEncTime:  d.LastEncTime,
+				LastDecTime:  d.LastDecTime,
+				SendRVPlain:  d.SendRVPlain,
+				RecvRVPlain:  d.RecvRVPlain,
+				DrainRVPlain: d.DrainRVPlain,
+			}
+		}
+		out = append(out, r)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(struct {
+		Contacts []row `json:"contacts"`
+	}{Contacts: out})
+}
+
+// handleStatsPosts returns the local user's authored posts with engagement
+// aggregates (hearts, comments) derived from ListPostStatusUpdates, plus
+// counts of inbound subscribers and outbound subscriptions.
+func (s *StatusServer) handleStatsPosts(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	c := s.currentClient()
+	if c == nil {
+		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
+		return
+	}
+	myID := c.PublicID()
+	posts, err := c.ListPosts()
+	if err != nil {
+		http.Error(w, "list posts: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	type authored struct {
+		PID          string    `json:"pid"`
+		Title        string    `json:"title"`
+		Date         time.Time `json:"date"`
+		LastStatusTS time.Time `json:"last_status_ts,omitempty"`
+		Hearts       int       `json:"hearts"`
+		Comments     int       `json:"comments"`
+	}
+	out := make([]authored, 0)
+	for _, p := range posts {
+		if p.AuthorID != myID {
+			continue
+		}
+		row := authored{
+			PID:          p.ID.String(),
+			Title:        p.Title,
+			Date:         p.Date,
+			LastStatusTS: p.LastStatusTS,
+		}
+		updates, _ := c.ListPostStatusUpdates(myID, p.ID)
+		for _, u := range updates {
+			if u.Attributes == nil {
+				continue
+			}
+			// Heart toggles: "1" adds, "0" removes. Comments: any non-empty
+			// body counts. Same semantics rpc.routedrpc.go uses on the
+			// hash side (see HasContent at routedrpc.go:1332).
+			switch u.Attributes[rpc.RMPSHeart] {
+			case rpc.RMPSHeartYes:
+				row.Hearts++
+			case rpc.RMPSHeartNo:
+				if row.Hearts > 0 {
+					row.Hearts--
+				}
+			}
+			if u.Attributes[rpc.RMPSComment] != "" {
+				row.Comments++
+			}
+		}
+		out = append(out, row)
+	}
+	subs, _ := c.ListPostSubscriptions()
+	subscribers, _ := c.ListPostSubscribers()
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(struct {
+		Authored         []authored `json:"authored"`
+		SubscribersCount int        `json:"subscribers_count"`
+		SubscriptionsCnt int        `json:"subscriptions_count"`
+	}{
+		Authored:         out,
+		SubscribersCount: len(subscribers),
+		SubscriptionsCnt: len(subs),
+	})
 }
