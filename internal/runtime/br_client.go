@@ -618,6 +618,151 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 				Payload: map[string]any{"sessRV": sessRV.String()},
 			})
 		}))
+
+		// ---- GC (group-chat) notifications ----
+		// 12 OnGC* hooks. We republish each as gc-<kebab>. The dashboard's
+		// existing ChatService.GCMStream covers message arrival as 'gcm',
+		// but we also surface the higher-fidelity gc-message event here
+		// (from OnGCMNtfn) so structural and message events flow over the
+		// same notif bus.
+		ntfns.Register(client.OnGCMNtfn(func(ru *client.RemoteUser, gcm rpc.RMGroupMessage, ts time.Time) {
+			notifs.Publish(NotifEvent{
+				Type:      "gc-message",
+				Timestamp: ts,
+				Payload: map[string]any{
+					"gcid":     gcm.ID.String(),
+					"from":     ru.ID().String(),
+					"fromNick": ru.Nick(),
+					"message":  gcm.Message,
+					"mode":     int(gcm.Mode),
+				},
+			})
+		}))
+		ntfns.Register(client.OnInvitedToGCNtfn(func(ru *client.RemoteUser, iid uint64, invite rpc.RMGroupInvite) {
+			notifs.Publish(NotifEvent{
+				Type: "gc-invited",
+				Payload: map[string]any{
+					"iid":         iid,
+					"gcid":        invite.ID.String(),
+					"name":        invite.Name,
+					"description": invite.Description,
+					"from":        ru.ID().String(),
+					"fromNick":    ru.Nick(),
+					"expires":     invite.Expires,
+					"version":     invite.Version,
+				},
+			})
+		}))
+		ntfns.Register(client.OnJoinedGCNtfn(func(gc rpc.RMGroupList) {
+			notifs.Publish(NotifEvent{
+				Type: "gc-joined",
+				Payload: map[string]any{
+					"gcid":    gc.ID.String(),
+					"name":    gc.Name,
+					"members": shortIDsToStrings(gc.Members),
+				},
+			})
+		}))
+		ntfns.Register(client.OnGCInviteAcceptedNtfn(func(ru *client.RemoteUser, gc rpc.RMGroupList) {
+			notifs.Publish(NotifEvent{
+				Type: "gc-invite-accepted",
+				Payload: map[string]any{
+					"by":     ru.ID().String(),
+					"byNick": ru.Nick(),
+					"gcid":   gc.ID.String(),
+					"name":   gc.Name,
+				},
+			})
+		}))
+		ntfns.Register(client.OnAddedGCMembersNtfn(func(gc rpc.RMGroupList, uids []clientintf.UserID) {
+			notifs.Publish(NotifEvent{
+				Type: "gc-members-added",
+				Payload: map[string]any{
+					"gcid":  gc.ID.String(),
+					"added": userIDsToStrings(uids),
+				},
+			})
+		}))
+		ntfns.Register(client.OnRemovedGCMembersNtfn(func(gc rpc.RMGroupList, uids []clientintf.UserID) {
+			notifs.Publish(NotifEvent{
+				Type: "gc-members-removed",
+				Payload: map[string]any{
+					"gcid":    gc.ID.String(),
+					"removed": userIDsToStrings(uids),
+				},
+			})
+		}))
+		ntfns.Register(client.OnGCUserPartedNtfn(func(gcid client.GCID, uid client.UserID, reason string, kicked bool) {
+			notifs.Publish(NotifEvent{
+				Type: "gc-parted",
+				Payload: map[string]any{
+					"gcid":   gcid.String(),
+					"uid":    uid.String(),
+					"reason": reason,
+					"kicked": kicked,
+				},
+			})
+		}))
+		ntfns.Register(client.OnGCKilledNtfn(func(ru *client.RemoteUser, gcid client.GCID, reason string) {
+			notifs.Publish(NotifEvent{
+				Type: "gc-killed",
+				Payload: map[string]any{
+					"gcid":   gcid.String(),
+					"by":     ru.ID().String(),
+					"byNick": ru.Nick(),
+					"reason": reason,
+				},
+			})
+		}))
+		ntfns.Register(client.OnGCUpgradedNtfn(func(gc rpc.RMGroupList, oldVersion uint8) {
+			notifs.Publish(NotifEvent{
+				Type: "gc-upgraded",
+				Payload: map[string]any{
+					"gcid":       gc.ID.String(),
+					"newVersion": gc.Version,
+					"oldVersion": oldVersion,
+				},
+			})
+		}))
+		ntfns.Register(client.OnGCAdminsChangedNtfn(func(ru *client.RemoteUser, gc rpc.RMGroupList, added, removed []zkidentity.ShortID) {
+			notifs.Publish(NotifEvent{
+				Type: "gc-admins-changed",
+				Payload: map[string]any{
+					"gcid":    gc.ID.String(),
+					"by":      ru.ID().String(),
+					"byNick":  ru.Nick(),
+					"added":   shortIDsToStrings(added),
+					"removed": shortIDsToStrings(removed),
+				},
+			})
+		}))
+		ntfns.Register(client.OnGCVersionWarning(func(ru *client.RemoteUser, gc rpc.RMGroupList, minVersion, maxVersion uint8) {
+			notifs.Publish(NotifEvent{
+				Type: "gc-version-warning",
+				Payload: map[string]any{
+					"gcid":       gc.ID.String(),
+					"name":       gc.Name,
+					"from":       ru.ID().String(),
+					"fromNick":   ru.Nick(),
+					"minVersion": minVersion,
+					"maxVersion": maxVersion,
+				},
+			})
+		}))
+		ntfns.Register(client.OnGCWithUnkxdMemberNtfn(func(gcid zkidentity.ShortID, uid clientintf.UserID,
+			hasKX, hasMI bool, miCount uint32, startedMIMediator *clientintf.UserID) {
+			payload := map[string]any{
+				"gcid":    gcid.String(),
+				"uid":     uid.String(),
+				"hasKX":   hasKX,
+				"hasMI":   hasMI,
+				"miCount": miCount,
+			}
+			if startedMIMediator != nil {
+				payload["mediator"] = startedMIMediator.String()
+			}
+			notifs.Publish(NotifEvent{Type: "gc-unkxd-member", Payload: payload})
+		}))
 	}
 
 	// Audio handler: when a sink is registered for the session (Phase 3 WS
@@ -681,6 +826,25 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 		return nil, fmt.Errorf("client.New: %w", err)
 	}
 	return c, nil
+}
+
+// shortIDsToStrings + userIDsToStrings hex-encode slices of zkidentity IDs
+// for inclusion in JSON notif payloads. Used by the GC notification
+// republishers.
+func shortIDsToStrings(ids []zkidentity.ShortID) []string {
+	out := make([]string, len(ids))
+	for i, id := range ids {
+		out[i] = id.String()
+	}
+	return out
+}
+
+func userIDsToStrings(ids []clientintf.UserID) []string {
+	out := make([]string, len(ids))
+	for i, id := range ids {
+		out[i] = id.String()
+	}
+	return out
 }
 
 // matomsToDCR converts BR's internal milli-atom unit (1 DCR = 1e11 matoms)

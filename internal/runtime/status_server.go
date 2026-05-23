@@ -104,6 +104,8 @@ func (s *StatusServer) Run(ctx context.Context) error {
 	mux.HandleFunc("/stats/posts", s.handleStatsPosts)
 	mux.HandleFunc("/rtdt/sessions", s.handleRTDT)
 	mux.HandleFunc("/rtdt/sessions/", s.handleRTDT)
+	mux.HandleFunc("/gc", s.handleGC)
+	mux.HandleFunc("/gc/", s.handleGC)
 
 	srv := &http.Server{
 		Addr:              s.Listen,
