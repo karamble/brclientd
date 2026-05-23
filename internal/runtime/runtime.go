@@ -39,7 +39,9 @@ type Config struct {
 	AppVersion        string
 	BRServer          string
 	DB                *clientdb.DB
-	DcrlndPay         *client.DcrlnPaymentClient
+	DcrlndTLSCert     string
+	DcrlndMacaroon    string
+	DcrlndRPCHost     string
 	ReplayMsgLogsRoot string
 	UploadDir         string
 }
@@ -70,10 +72,21 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	g.Go(func() error { return statusSrv.Run(gctx) })
 
-	if err := waitForDcrlndUnlocked(gctx, cfg.DcrlndPay, tracker, cfg.LogFn("LNGT")); err != nil {
+	// Connecting to dcrlnd must come AFTER the status server kicks off:
+	// on a fresh stack the dcrlnd cert doesn't exist until the user runs
+	// the LN setup wizard, and waitForDcrlndConnect blocks until it
+	// appears. If this ran before the status server, port 7677 would
+	// never open and the dashboard / docker healthcheck would have
+	// nothing to talk to.
+	dcrlndPay, err := waitForDcrlndConnect(gctx, cfg.DcrlndTLSCert, cfg.DcrlndMacaroon, cfg.DcrlndRPCHost, cfg.LogFn("LNPC"))
+	if err != nil {
 		return err
 	}
-	if err := waitForChannelToHub(gctx, cfg.DcrlndPay, tracker, cfg.LogFn("CHGT")); err != nil {
+
+	if err := waitForDcrlndUnlocked(gctx, dcrlndPay, tracker, cfg.LogFn("LNGT")); err != nil {
+		return err
+	}
+	if err := waitForChannelToHub(gctx, dcrlndPay, tracker, cfg.LogFn("CHGT")); err != nil {
 		return err
 	}
 
@@ -81,7 +94,7 @@ func Run(ctx context.Context, cfg Config) error {
 
 	c, err := startBRClient(BRClientCfg{
 		DB:           cfg.DB,
-		DcrlndPay:    cfg.DcrlndPay,
+		DcrlndPay:    dcrlndPay,
 		BRServer:     cfg.BRServer,
 		Tracker:      tracker,
 		LogFn:        cfg.LogFn,
@@ -136,12 +149,12 @@ func Run(ctx context.Context, cfg Config) error {
 	// listen address with the pre-setup endpoint (handed off cleanly when
 	// preSetup.Run returned) and so the chat / GC / posts / payments
 	// services have a live *client.Client to bind into.
-	g.Go(func() error { return runClientRPC(gctx, cfg, c) })
+	g.Go(func() error { return runClientRPC(gctx, cfg, c, dcrlndPay) })
 
 	return g.Wait()
 }
 
-func runClientRPC(ctx context.Context, cfg Config, c *client.Client) error {
+func runClientRPC(ctx context.Context, cfg Config, c *client.Client, dcrlndPay *client.DcrlnPaymentClient) error {
 	listeners, err := buildListeners(cfg.Certs, cfg.ClientRPCListen)
 	if err != nil {
 		return err
@@ -162,7 +175,7 @@ func runClientRPC(ctx context.Context, cfg Config, c *client.Client) error {
 		Client:            c,
 		Log:               cfg.LogFn("RPCS"),
 		RootReplayMsgLogs: cfg.ReplayMsgLogsRoot,
-		PayClient:         cfg.DcrlndPay,
+		PayClient:         dcrlndPay,
 	}); err != nil {
 		return fmt.Errorf("init chat service: %w", err)
 	}

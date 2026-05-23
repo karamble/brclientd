@@ -1,16 +1,14 @@
 ARG BR_VERSION=v0.2.4
 
-FROM golang:1.25-bookworm AS build
+FROM golang:1.25-alpine AS build
 WORKDIR /src
 COPY go.mod ./
 COPY . .
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/brclientd ./cmd/brclientd
 
-FROM debian:bookworm-slim
-RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates tzdata \
- && rm -rf /var/lib/apt/lists/*
-RUN useradd --create-home --uid 1000 brclientd \
+FROM alpine:latest
+RUN apk add --no-cache ca-certificates tzdata
+RUN adduser -D -u 1000 brclientd \
  && mkdir -p /home/brclientd/.brclientd /app-data/brclientd \
  && chown -R brclientd:brclientd /home/brclientd /app-data
 COPY --from=build /out/brclientd /usr/local/bin/brclientd

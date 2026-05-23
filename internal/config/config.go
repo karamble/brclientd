@@ -172,16 +172,14 @@ func Load(args []string, version string) (*Config, error) {
 
 	if cfg.Dcrlnd.TLSCertPath != "" {
 		cfg.Dcrlnd.TLSCertPath = cleanAndExpandPath(cfg.Dcrlnd.TLSCertPath)
-		if _, err := os.Stat(cfg.Dcrlnd.TLSCertPath); err != nil {
-			return nil, fmt.Errorf("dcrlnd TLS cert at %q: %w", cfg.Dcrlnd.TLSCertPath, err)
-		}
 	}
 	if cfg.Dcrlnd.MacaroonPath != "" {
 		cfg.Dcrlnd.MacaroonPath = cleanAndExpandPath(cfg.Dcrlnd.MacaroonPath)
-		if _, err := os.Stat(cfg.Dcrlnd.MacaroonPath); err != nil {
-			return nil, fmt.Errorf("dcrlnd macaroon at %q: %w", cfg.Dcrlnd.MacaroonPath, err)
-		}
 	}
+	// Existence of these files is checked at runtime in connectDcrlnd, not
+	// at config load. On a fresh stack the files don't exist until dcrlnd
+	// runs through its wallet setup; brclientd should poll-and-wait, not
+	// fail-fast (which crashloops the container and tanks Umbrel health).
 
 	return cfg, nil
 }

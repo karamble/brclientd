@@ -13,10 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
-	"time"
 
-	"github.com/companyzero/bisonrelay/client"
-	"github.com/decred/dcrlnd/lnrpc"
 	flags "github.com/jessevdk/go-flags"
 
 	"github.com/karamble/brclientd/internal/certgen"
@@ -75,12 +72,7 @@ func run(args []string) error {
 		return fmt.Errorf("open clientdb: %w", err)
 	}
 
-	pc, err := connectDcrlnd(ctx, cfg)
-	if err != nil {
-		return err
-	}
-
-	brlog.BRCD.Infof("Handing off to BR runtime (pre-setup runs only if identity is missing)")
+	brlog.BRCD.Infof("Handing off to BR runtime (status server up first; dcrlnd connect waits inside runtime)")
 	err = runtime.Run(ctx, runtime.Config{
 		Log:               brlog.RUNT,
 		LogFn:             brlog.LoggerFn,
@@ -91,7 +83,9 @@ func run(args []string) error {
 		AppVersion:        Version,
 		BRServer:          cfg.BRServer,
 		DB:                db,
-		DcrlndPay:         pc,
+		DcrlndTLSCert:     cfg.Dcrlnd.TLSCertPath,
+		DcrlndMacaroon:    cfg.Dcrlnd.MacaroonPath,
+		DcrlndRPCHost:     cfg.Dcrlnd.RPCHost,
 		ReplayMsgLogsRoot: filepath.Join(cfg.DataDir, "replaymsglog"),
 		UploadDir:         filepath.Join(cfg.DataDir, "uploads"),
 	})
@@ -116,34 +110,6 @@ func ensureCerts(cfg *config.Config) (certgen.Triplet, error) {
 		}
 	}
 	return certs, nil
-}
-
-func connectDcrlnd(ctx context.Context, cfg *config.Config) (*client.DcrlnPaymentClient, error) {
-	brlog.BRCD.Infof("Connecting to dcrlnd at %s", cfg.Dcrlnd.RPCHost)
-	dialCtx, dialCancel := context.WithTimeout(ctx, 30*time.Second)
-	defer dialCancel()
-
-	pc, err := client.NewDcrlndPaymentClient(dialCtx, client.DcrlnPaymentClientCfg{
-		TLSCertPath:  cfg.Dcrlnd.TLSCertPath,
-		MacaroonPath: cfg.Dcrlnd.MacaroonPath,
-		Address:      cfg.Dcrlnd.RPCHost,
-		Log:          brlog.LNPC,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("dcrlnd payment client: %w", err)
-	}
-
-	info, err := pc.LNRPC().GetInfo(dialCtx, &lnrpc.GetInfoRequest{})
-	switch {
-	case err == nil:
-		brlog.BRCD.Infof("dcrlnd reachable: identity=%s version=%s synced_to_chain=%v",
-			info.IdentityPubkey, info.Version, info.SyncedToChain)
-	case strings.Contains(err.Error(), "wallet locked"):
-		brlog.BRCD.Infof("dcrlnd reachable but wallet is locked; will become usable once unlocked")
-	default:
-		brlog.BRCD.Warnf("dcrlnd reachable but GetInfo failed: %v", err)
-	}
-	return pc, nil
 }
 
 func certHosts(cfg *config.Config) []string {
