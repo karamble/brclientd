@@ -9,6 +9,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net"
+	"strconv"
 	"time"
 
 	"github.com/companyzero/bisonrelay/client"
@@ -93,6 +94,79 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 		}
 	}))
 
+	// OnTipReceived fires when a remote user successfully tips the local
+	// client. Log to the sender's PM thread so the recipient sees a
+	// system message inline, and publish for live append.
+	ntfns.Register(client.OnTipReceivedNtfn(func(ru *client.RemoteUser, amountMAtoms int64) {
+		dcr := matomsToDCR(amountMAtoms)
+		senderID := ru.ID()
+		senderNick := ru.Nick()
+		// Mirrors bruig's receiver-side string (chat/events.dart:732).
+		line := fmt.Sprintf("Received %s DCR from %s!", formatDCR(dcr), senderNick)
+		nlog.Infof("Received %s DCR from %s", formatDCR(dcr), senderNick)
+		err := cfg.DB.Update(context.Background(), func(tx clientdb.ReadWriteTx) error {
+			_, err := cfg.DB.LogPM(tx, senderID, true, senderNick, line, time.Now())
+			return err
+		})
+		if err != nil {
+			nlog.Warnf("Log received tip to PM history: %v", err)
+		}
+		if cfg.Notifs != nil {
+			cfg.Notifs.Publish(NotifEvent{
+				Type: "tip-received",
+				Payload: map[string]any{
+					"sender":     senderID.String(),
+					"senderNick": senderNick,
+					"matoms":     amountMAtoms,
+					"dcr":        dcr,
+					"line":       line,
+				},
+			})
+		}
+	}))
+
+	// OnTipAttemptProgress fires per attempt on the SENDER side. Only log
+	// + publish on terminal outcomes (completed=true OR no more retries)
+	// to keep the thread from being spammed with per-retry status lines.
+	ntfns.Register(client.OnTipAttemptProgressNtfn(func(ru *client.RemoteUser, amtMAtoms int64, completed bool, attempt int, attemptErr error, willRetry bool) {
+		if !completed && willRetry {
+			return
+		}
+		dcr := matomsToDCR(amtMAtoms)
+		recipientID := ru.ID()
+		recipientNick := ru.Nick()
+		var line string
+		var typ string
+		// Wording mirrors bruig's TipUserProgressW (chat/events.dart:1148-1156).
+		if completed {
+			line = fmt.Sprintf("Tip attempt of %s DCR completed successfully!", formatDCR(dcr))
+			typ = "tip-sent"
+		} else {
+			line = fmt.Sprintf("Tip attempt of %s DCR failed due to %v. Given up on attempting to tip.", formatDCR(dcr), attemptErr)
+			typ = "tip-failed"
+		}
+		nlog.Infof("%s to %s", line, recipientNick)
+		err := cfg.DB.Update(context.Background(), func(tx clientdb.ReadWriteTx) error {
+			_, err := cfg.DB.LogPM(tx, recipientID, true, "", line, time.Now())
+			return err
+		})
+		if err != nil {
+			nlog.Warnf("Log sent tip to PM history: %v", err)
+		}
+		if cfg.Notifs != nil {
+			cfg.Notifs.Publish(NotifEvent{
+				Type: typ,
+				Payload: map[string]any{
+					"recipient":     recipientID.String(),
+					"recipientNick": recipientNick,
+					"matoms":        amtMAtoms,
+					"dcr":           dcr,
+					"line":          line,
+				},
+			})
+		}
+	}))
+
 	brCfg := client.Config{
 		DB:            cfg.DB,
 		PayClient:     cfg.DcrlndPay,
@@ -135,4 +209,17 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 		return nil, fmt.Errorf("client.New: %w", err)
 	}
 	return c, nil
+}
+
+// matomsToDCR converts BR's internal milli-atom unit (1 DCR = 1e11 matoms)
+// to a DCR float. Lossy in principle but precise enough for display since
+// tip amounts are bounded by available LN capacity.
+func matomsToDCR(matoms int64) float64 {
+	return float64(matoms) / 1e11
+}
+
+// formatDCR renders a DCR amount with trailing-zero trimming so small tips
+// don't render as "0.00100000" while large tips still show full precision.
+func formatDCR(dcr float64) string {
+	return strconv.FormatFloat(dcr, 'f', -1, 64)
 }
