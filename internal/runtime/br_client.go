@@ -187,6 +187,47 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 		})
 	}))
 
+	// OnFileDownloadProgress fires per chunk-batch during a file
+	// transfer (both incoming downloads and outgoing sends, per BR's
+	// terminology). nbMissingChunks lets the Manage Downloads tab
+	// render a progress bar without polling.
+	ntfns.Register(client.OnFileDownloadProgress(func(ru *client.RemoteUser, fm rpc.FileMetadata, nbMissingChunks int) {
+		if cfg.Notifs == nil {
+			return
+		}
+		cfg.Notifs.Publish(NotifEvent{
+			Type: "file-download-progress",
+			Payload: map[string]any{
+				"uid":            ru.ID().String(),
+				"nick":           ru.Nick(),
+				"filename":       fm.Filename,
+				"size":           fm.Size,
+				"total_chunks":   len(fm.Manifest),
+				"missing_chunks": nbMissingChunks,
+			},
+		})
+	}))
+
+	// OnFileDownloadCompleted fires once the final chunk lands and the
+	// file is fully reconstructed on disk. diskPath is the absolute
+	// path BR wrote the bytes to.
+	ntfns.Register(client.OnFileDownloadCompleted(func(ru *client.RemoteUser, fm rpc.FileMetadata, diskPath string) {
+		nlog.Infof("Completed download %s from %s -> %s", fm.Filename, ru.Nick(), diskPath)
+		if cfg.Notifs == nil {
+			return
+		}
+		cfg.Notifs.Publish(NotifEvent{
+			Type: "file-download-completed",
+			Payload: map[string]any{
+				"uid":       ru.ID().String(),
+				"nick":      ru.Nick(),
+				"filename":  fm.Filename,
+				"size":      fm.Size,
+				"disk_path": diskPath,
+			},
+		})
+	}))
+
 	// OnContentListReceived fires when a remote user replies to our
 	// ListUserContent request with the files they have shared. Forwarded
 	// verbatim to subscribers; the dashboard's modal hydrates from this.

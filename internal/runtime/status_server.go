@@ -88,6 +88,10 @@ func (s *StatusServer) Run(ctx context.Context) error {
 	mux.HandleFunc("/posts/comment", s.handlePostComment)
 	mux.HandleFunc("/posts/new", s.handlePostsNew)
 	mux.HandleFunc("/shared-files", s.handleSharedFiles)
+	mux.HandleFunc("/shared-files/add", s.handleSharedFileAdd)
+	mux.HandleFunc("/shared-files/remove", s.handleSharedFileRemove)
+	mux.HandleFunc("/downloads", s.handleDownloads)
+	mux.HandleFunc("/downloads/cancel", s.handleDownloadCancel)
 	mux.HandleFunc("/notifications", s.handleNotifications)
 	mux.HandleFunc("/invites/redeem-key", s.handleRedeemPaidInvite)
 	mux.HandleFunc("/files/send", s.handleSendFile)
@@ -688,6 +692,233 @@ func (s *StatusServer) handleSharedFiles(w http.ResponseWriter, r *http.Request)
 	_ = json.NewEncoder(w).Encode(struct {
 		Files []sharedFile `json:"files"`
 	}{Files: out})
+}
+
+// handleSharedFileAdd receives a multipart upload + sharing parameters
+// and registers the file as a local SharedFile. cost_matoms is the
+// per-fetch price in milliatoms (0 = free), target_uid optional (empty
+// string = global share). The upload file is read by c.ShareFile into
+// BR's internal content store and removed from UploadDir after.
+func (s *StatusServer) handleSharedFileAdd(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	c := s.currentClient()
+	if c == nil {
+		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
+		return
+	}
+	if s.UploadDir == "" {
+		http.Error(w, "upload directory not configured", http.StatusInternalServerError)
+		return
+	}
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		http.Error(w, "parse multipart: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	defer r.MultipartForm.RemoveAll()
+
+	costStr := strings.TrimSpace(r.FormValue("cost_matoms"))
+	var cost uint64
+	if costStr != "" {
+		v, err := strconv.ParseUint(costStr, 10, 64)
+		if err != nil {
+			http.Error(w, "invalid cost_matoms: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		cost = v
+	}
+	descr := strings.TrimSpace(r.FormValue("descr"))
+	targetUIDStr := strings.TrimSpace(r.FormValue("target_uid"))
+	var targetUID *zkidentity.ShortID
+	if targetUIDStr != "" {
+		var uid zkidentity.ShortID
+		if err := uid.FromString(targetUIDStr); err != nil {
+			http.Error(w, "invalid target_uid: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		targetUID = &uid
+	}
+
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		http.Error(w, "file part missing: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	safeName := sanitizeUploadName(header.Filename)
+	if safeName == "" {
+		http.Error(w, "invalid filename", http.StatusBadRequest)
+		return
+	}
+	if err := os.MkdirAll(s.UploadDir, 0o700); err != nil {
+		http.Error(w, "mkdir uploads: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	storedPath, err := storeUpload(s.UploadDir, safeName, file)
+	if err != nil {
+		http.Error(w, "store upload: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	sf, _, err := c.ShareFile(storedPath, targetUID, cost, descr)
+	// ShareFile reads the file into its own content store; we no
+	// longer need the upload regardless of success.
+	_ = os.Remove(storedPath)
+	if err != nil {
+		http.Error(w, "share file: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"fid":      sf.FID.String(),
+		"filename": sf.Filename,
+		"cost":     cost,
+		"global":   targetUID == nil,
+	})
+}
+
+// handleSharedFileRemove unshares a previously-shared file. Body:
+// {fid, target_uid?}. target_uid empty = remove the global share entry;
+// otherwise revokes the share with just that user.
+func (s *StatusServer) handleSharedFileRemove(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	c := s.currentClient()
+	if c == nil {
+		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
+		return
+	}
+	var req struct {
+		FID       string `json:"fid"`
+		TargetUID string `json:"target_uid"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	var fid zkidentity.ShortID
+	if err := fid.FromString(req.FID); err != nil {
+		http.Error(w, "invalid fid: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	var targetUID *zkidentity.ShortID
+	if strings.TrimSpace(req.TargetUID) != "" {
+		var uid zkidentity.ShortID
+		if err := uid.FromString(req.TargetUID); err != nil {
+			http.Error(w, "invalid target_uid: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		targetUID = &uid
+	}
+	if err := c.UnshareFile(fid, targetUID); err != nil {
+		http.Error(w, "unshare file: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleDownloads returns the flat list of in-flight + completed file
+// downloads tracked by BR. Sent files (uploads we're serving) are
+// included so the sender side can see progress too.
+func (s *StatusServer) handleDownloads(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	c := s.currentClient()
+	if c == nil {
+		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
+		return
+	}
+	downloads, err := c.ListDownloads()
+	if err != nil {
+		http.Error(w, "list downloads: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	type entry struct {
+		UID           string `json:"uid"`
+		Nick          string `json:"nick"`
+		FID           string `json:"fid"`
+		Filename      string `json:"filename"`
+		Size          uint64 `json:"size"`
+		TotalChunks   int    `json:"total_chunks"`
+		MissingChunks int    `json:"missing_chunks"`
+		DiskPath      string `json:"disk_path"`
+		IsSent        bool   `json:"is_sent"`
+	}
+	out := make([]entry, 0, len(downloads))
+	for _, d := range downloads {
+		var filename string
+		var size uint64
+		var total int
+		if d.Metadata != nil {
+			filename = d.Metadata.Filename
+			size = d.Metadata.Size
+			total = len(d.Metadata.Manifest)
+		}
+		// A chunk we've stored locally lands in ChunkStateDownloaded
+		// (incoming) or ChunkStateUploaded (outgoing). Anything else
+		// (has_invoice, paying_invoice, requested_chunk, paid, ...)
+		// counts as still-in-flight for progress purposes.
+		missing := 0
+		for _, st := range d.ChunkStates {
+			if st != clientdb.ChunkStateDownloaded && st != clientdb.ChunkStateUploaded {
+				missing++
+			}
+		}
+		// Nick lookup: a contact removed mid-transfer would return
+		// userNotFoundError; in that case we fall back to the UID.
+		nick := c.UserLogNick(d.UID)
+		out = append(out, entry{
+			UID:           d.UID.String(),
+			Nick:          nick,
+			FID:           d.FID.String(),
+			Filename:      filename,
+			Size:          size,
+			TotalChunks:   total,
+			MissingChunks: missing,
+			DiskPath:      d.DiskPath,
+			IsSent:        d.IsSentFile,
+		})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(struct {
+		Downloads []entry `json:"downloads"`
+	}{Downloads: out})
+}
+
+// handleDownloadCancel cancels an in-flight download by FID.
+func (s *StatusServer) handleDownloadCancel(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	c := s.currentClient()
+	if c == nil {
+		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
+		return
+	}
+	var req struct {
+		FID string `json:"fid"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	var fid zkidentity.ShortID
+	if err := fid.FromString(req.FID); err != nil {
+		http.Error(w, "invalid fid: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := c.CancelDownload(fid); err != nil {
+		http.Error(w, "cancel download: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // handlePostsNew authors a new post and shares it with our subscribers.
