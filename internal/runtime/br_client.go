@@ -94,6 +94,73 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 		}
 	}))
 
+	// OnRemoteSubscriptionChanged fires when our subscription state with a
+	// remote user changes (their reply to our SubscribeToPosts /
+	// UnsubscribeToPosts request landed). Wording mirrors bruig's
+	// PostSubscriptionEventW (events.dart:845).
+	ntfns.Register(client.OnRemoteSubscriptionChangedNtfn(func(ru *client.RemoteUser, subscribed bool) {
+		uid := ru.ID()
+		ruNick := ru.Nick()
+		var line, typ string
+		if subscribed {
+			line = "Subscribed to user's posts!"
+			typ = "posts-subscribed"
+		} else {
+			line = "Unsubscribed from user's posts"
+			typ = "posts-unsubscribed"
+		}
+		nlog.Infof("%s (%s)", line, ruNick)
+		err := cfg.DB.Update(context.Background(), func(tx clientdb.ReadWriteTx) error {
+			_, err := cfg.DB.LogPM(tx, uid, true, "", line, time.Now())
+			return err
+		})
+		if err != nil {
+			nlog.Warnf("Log subscription change to PM history: %v", err)
+		}
+		if cfg.Notifs != nil {
+			cfg.Notifs.Publish(NotifEvent{
+				Type: typ,
+				Payload: map[string]any{
+					"uid":  uid.String(),
+					"nick": ruNick,
+					"line": line,
+				},
+			})
+		}
+	}))
+
+	// OnPostSubscriberUpdated fires when a REMOTE user changes their
+	// subscription to OUR posts (the inverse of OnRemoteSubscriptionChanged).
+	// Wording mirrors bruig's PostsSubscriberUpdatedW (events.dart:865-866).
+	ntfns.Register(client.OnPostSubscriberUpdated(func(ru *client.RemoteUser, subscribed bool) {
+		uid := ru.ID()
+		ruNick := ru.Nick()
+		verb := "unsubscribed from"
+		if subscribed {
+			verb = "subscribed to"
+		}
+		line := fmt.Sprintf("%s %s the local client's posts.", ruNick, verb)
+		nlog.Infof("%s", line)
+		err := cfg.DB.Update(context.Background(), func(tx clientdb.ReadWriteTx) error {
+			_, err := cfg.DB.LogPM(tx, uid, true, "", line, time.Now())
+			return err
+		})
+		if err != nil {
+			nlog.Warnf("Log subscriber update to PM history: %v", err)
+		}
+		if cfg.Notifs != nil {
+			cfg.Notifs.Publish(NotifEvent{
+				Type: "posts-subscriber-updated",
+				Payload: map[string]any{
+					"uid":        uid.String(),
+					"nick":       ruNick,
+					"subscribed": subscribed,
+					"line":       line,
+				},
+			})
+		}
+	}))
+
 	// OnTipReceived fires when a remote user successfully tips the local
 	// client. Log to the sender's PM thread so the recipient sees a
 	// system message inline, and publish for live append.

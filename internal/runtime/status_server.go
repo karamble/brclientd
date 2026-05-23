@@ -76,6 +76,8 @@ func (s *StatusServer) Run(ctx context.Context) error {
 	mux.HandleFunc("/contacts/suggest-kx", s.handleSuggestKX)
 	mux.HandleFunc("/contacts/trans-reset", s.handleTransReset)
 	mux.HandleFunc("/contacts/accept-suggestion", s.handleAcceptSuggestion)
+	mux.HandleFunc("/contacts/subscribe-posts", s.handleSubscribePosts)
+	mux.HandleFunc("/contacts/unsubscribe-posts", s.handleUnsubscribePosts)
 	mux.HandleFunc("/notifications", s.handleNotifications)
 	mux.HandleFunc("/invites/redeem-key", s.handleRedeemPaidInvite)
 	mux.HandleFunc("/files/send", s.handleSendFile)
@@ -175,6 +177,9 @@ func (s *StatusServer) handleHistoryPM(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleContacts returns the BR client's in-memory address book entries.
+// Each entry is augmented with posts_subscribed (whether we currently
+// subscribe to that user's posts) so the dashboard sub-nav can render the
+// right Subscribe / Unsubscribe state without an extra round-trip.
 // 503 until the BR client has been instantiated (i.e. until past the
 // gate / pre-setup phase).
 func (s *StatusServer) handleContacts(w http.ResponseWriter, r *http.Request) {
@@ -188,10 +193,26 @@ func (s *StatusServer) handleContacts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	entries := c.AddressBook()
+	subs, _ := c.ListPostSubscriptions()
+	subscribed := make(map[zkidentity.ShortID]bool, len(subs))
+	for _, s := range subs {
+		subscribed[s.To] = true
+	}
+	type contactEntry struct {
+		*clientdb.AddressBookEntry
+		PostsSubscribed bool `json:"posts_subscribed"`
+	}
+	out := make([]contactEntry, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, contactEntry{
+			AddressBookEntry: e,
+			PostsSubscribed:  subscribed[e.ID.Identity],
+		})
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(struct {
-		Entries []*clientdb.AddressBookEntry `json:"entries"`
-	}{Entries: entries})
+		Entries []contactEntry `json:"entries"`
+	}{Entries: out})
 }
 
 // handleRenameContact sets the local NickAlias for a contact. Pure
@@ -378,6 +399,46 @@ func (s *StatusServer) handleAcceptSuggestion(w http.ResponseWriter, r *http.Req
 	}
 	if err := c.RequestMediateIdentity(mediator, target); err != nil {
 		http.Error(w, "accept suggestion: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleSubscribePosts asks the remote user to start sending us their posts.
+// BR transmits the request and notifies via OnRemoteSubscriptionChanged
+// when the reply lands; until then the subscription state is in flight.
+func (s *StatusServer) handleSubscribePosts(w http.ResponseWriter, r *http.Request) {
+	uid, ok := s.decodeUIDOnlyBody(w, r)
+	if !ok {
+		return
+	}
+	c := s.currentClient()
+	if c == nil {
+		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
+		return
+	}
+	if err := c.SubscribeToPosts(uid); err != nil {
+		http.Error(w, "subscribe to posts: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleUnsubscribePosts asks the remote user to stop sending posts. As
+// with subscribe, this is asynchronous and the new state surfaces via
+// OnRemoteSubscriptionChanged.
+func (s *StatusServer) handleUnsubscribePosts(w http.ResponseWriter, r *http.Request) {
+	uid, ok := s.decodeUIDOnlyBody(w, r)
+	if !ok {
+		return
+	}
+	c := s.currentClient()
+	if c == nil {
+		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
+		return
+	}
+	if err := c.UnsubscribeToPosts(uid); err != nil {
+		http.Error(w, "unsubscribe from posts: "+err.Error(), http.StatusBadGateway)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
