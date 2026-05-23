@@ -790,6 +790,12 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 		Notifications:          ntfns,
 		Logger:                 cfg.LogFn,
 		RTDTAudioStreamHandler: audioHandler,
+		// Auto-subscribe to posts on first-time KX with a new contact.
+		// BR's gating in client_kx.go:277 ensures this only fires on a
+		// fresh KX (updateAB && !oldUser) and defers to any prior
+		// PKXActionFetchPost. Matches brclient's default (autosubposts=1)
+		// and bruig's typical config.
+		AutoSubscribeToPosts: true,
 
 		LocalIDIniter: func(ctx context.Context) (*zkidentity.FullIdentity, error) {
 			select {
