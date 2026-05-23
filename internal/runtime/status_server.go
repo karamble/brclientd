@@ -70,6 +70,8 @@ func (s *StatusServer) Run(ctx context.Context) error {
 	mux.HandleFunc("/history/pm", s.handleHistoryPM)
 	mux.HandleFunc("/contacts", s.handleContacts)
 	mux.HandleFunc("/contacts/rename", s.handleRenameContact)
+	mux.HandleFunc("/contacts/kx-reset", s.handleKXReset)
+	mux.HandleFunc("/contacts/handshake", s.handleHandshake)
 	mux.HandleFunc("/invites/redeem-key", s.handleRedeemPaidInvite)
 	mux.HandleFunc("/files/send", s.handleSendFile)
 
@@ -224,6 +226,73 @@ func (s *StatusServer) handleRenameContact(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleKXReset triggers a ratchet reset with the specified user. Mirrors
+// bruig's "Request Ratchet Reset" action; calls client.ResetRatchet at
+// client_kx.go:370. Used when the local key state has drifted and messages
+// stop arriving in either direction.
+func (s *StatusServer) handleKXReset(w http.ResponseWriter, r *http.Request) {
+	uid, ok := s.decodeUIDOnlyBody(w, r)
+	if !ok {
+		return
+	}
+	c := s.currentClient()
+	if c == nil {
+		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
+		return
+	}
+	if err := c.ResetRatchet(uid); err != nil {
+		http.Error(w, "reset ratchet: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleHandshake starts a 3-way handshake with the specified user. Mirrors
+// bruig's "Perform Handshake" action; calls client.Handshake at
+// client.go:1163. Used to verify the ratchet is still operational.
+func (s *StatusServer) handleHandshake(w http.ResponseWriter, r *http.Request) {
+	uid, ok := s.decodeUIDOnlyBody(w, r)
+	if !ok {
+		return
+	}
+	c := s.currentClient()
+	if c == nil {
+		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
+		return
+	}
+	if err := c.Handshake(uid); err != nil {
+		http.Error(w, "handshake: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// decodeUIDOnlyBody enforces POST, decodes a {uid: "<hex>"} JSON body, and
+// parses the uid into a zkidentity.ShortID. Shared by per-user action
+// endpoints that take only a uid argument (KX reset, handshake, future
+// suggest-KX and transitive reset). On any failure it writes the response
+// status and returns ok=false; callers should return immediately.
+func (s *StatusServer) decodeUIDOnlyBody(w http.ResponseWriter, r *http.Request) (zkidentity.ShortID, bool) {
+	var zero zkidentity.ShortID
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return zero, false
+	}
+	var req struct {
+		UID string `json:"uid"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
+		return zero, false
+	}
+	var uid zkidentity.ShortID
+	if err := uid.FromString(req.UID); err != nil {
+		http.Error(w, "invalid uid: "+err.Error(), http.StatusBadRequest)
+		return zero, false
+	}
+	return uid, true
 }
 
 // handleRedeemPaidInvite accepts a bech32-encoded PaidInviteKey ("brpik1..."),
