@@ -9,6 +9,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net"
+	"time"
 
 	"github.com/companyzero/bisonrelay/client"
 	"github.com/companyzero/bisonrelay/client/clientdb"
@@ -27,6 +28,7 @@ type BRClientCfg struct {
 	BRServer        string
 	SeederCachePath string
 	Tracker         *Tracker
+	Notifs          *notifBus
 	LogFn           func(subsys string) slog.Logger
 	IdentityChan    <-chan *zkidentity.FullIdentity
 }
@@ -48,6 +50,47 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 	ntfns := client.NewNotificationManager()
 	ntfns.Register(client.OnServerSessionChangedNtfn(func(connected bool, _ clientintf.ServerPolicy) {
 		cfg.Tracker.SetConnected(connected)
+	}))
+
+	// OnKXSuggested fires when a contact sends us a SuggestKX. BR v0.2.4
+	// does not persist these or auto-log them to PM history; we do both
+	// ourselves so the suggestion survives restart and so the dashboard
+	// can render it. The published live event tells the dashboard to
+	// refresh the matching thread instead of waiting for the next history
+	// scroll.
+	nlog := cfg.LogFn("BRCD")
+	ntfns.Register(client.OnKXSuggested(func(invitee *client.RemoteUser, target zkidentity.PublicIdentity) {
+		targetIDHex := target.Identity.String()
+		targetNick := target.Nick
+		inviteeID := invitee.ID()
+		inviteeNick := invitee.Nick()
+		nlog.Infof("Received KX suggestion from %s for %s %q",
+			inviteeNick, targetIDHex, targetNick)
+
+		// Mirror BR's own SuggestedKXLogMsg format (clientdb/fscdb.go:96
+		// in newer versions: `Suggested KX to %s %q`). Keep it identical
+		// so the dashboard's parser works against both stored and live
+		// entries.
+		line := fmt.Sprintf("Suggested KX to %s %q", targetIDHex, targetNick)
+		err := cfg.DB.Update(context.Background(), func(tx clientdb.ReadWriteTx) error {
+			_, err := cfg.DB.LogPM(tx, inviteeID, true, inviteeNick, line, time.Now())
+			return err
+		})
+		if err != nil {
+			nlog.Warnf("Log KX suggestion to PM history: %v", err)
+		}
+
+		if cfg.Notifs != nil {
+			cfg.Notifs.Publish(NotifEvent{
+				Type: "kx-suggested",
+				Payload: map[string]any{
+					"invitee":     inviteeID.String(),
+					"inviteeNick": inviteeNick,
+					"target":      targetIDHex,
+					"targetNick":  targetNick,
+				},
+			})
+		}
 	}))
 
 	brCfg := client.Config{

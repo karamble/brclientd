@@ -54,6 +54,7 @@ type Config struct {
 // off to the long-running goroutines. Blocks until ctx is cancelled.
 func Run(ctx context.Context, cfg Config) error {
 	tracker := NewTracker(cfg.Log)
+	notifs := newNotifBus()
 
 	g, gctx := errgroup.WithContext(ctx)
 
@@ -70,6 +71,7 @@ func Run(ctx context.Context, cfg Config) error {
 		Tracker:   tracker,
 		DB:        cfg.DB,
 		UploadDir: cfg.UploadDir,
+		Notifs:    notifs,
 	}
 	g.Go(func() error { return statusSrv.Run(gctx) })
 
@@ -99,6 +101,7 @@ func Run(ctx context.Context, cfg Config) error {
 		BRServer:        cfg.BRServer,
 		SeederCachePath: cfg.SeederCachePath,
 		Tracker:         tracker,
+		Notifs:          notifs,
 		LogFn:           cfg.LogFn,
 		IdentityChan:    identityChan,
 	})

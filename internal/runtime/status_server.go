@@ -38,6 +38,7 @@ type StatusServer struct {
 	Tracker   *Tracker
 	DB        *clientdb.DB
 	UploadDir string
+	Notifs    *notifBus
 
 	clientMu sync.RWMutex
 	client   *client.Client
@@ -72,6 +73,10 @@ func (s *StatusServer) Run(ctx context.Context) error {
 	mux.HandleFunc("/contacts/rename", s.handleRenameContact)
 	mux.HandleFunc("/contacts/kx-reset", s.handleKXReset)
 	mux.HandleFunc("/contacts/handshake", s.handleHandshake)
+	mux.HandleFunc("/contacts/suggest-kx", s.handleSuggestKX)
+	mux.HandleFunc("/contacts/trans-reset", s.handleTransReset)
+	mux.HandleFunc("/contacts/accept-suggestion", s.handleAcceptSuggestion)
+	mux.HandleFunc("/notifications", s.handleNotifications)
 	mux.HandleFunc("/invites/redeem-key", s.handleRedeemPaidInvite)
 	mux.HandleFunc("/files/send", s.handleSendFile)
 
@@ -267,6 +272,171 @@ func (s *StatusServer) handleHandshake(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleSuggestKX asks `invitee` to KX with `target`. The sub-nav user is
+// the invitee; the user picks the target from their existing contacts.
+// Wraps client.SuggestKX (client_kx.go:636).
+func (s *StatusServer) handleSuggestKX(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Invitee string `json:"invitee"`
+		Target  string `json:"target"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	invitee, ok := parseUIDHex(w, "invitee", req.Invitee)
+	if !ok {
+		return
+	}
+	target, ok := parseUIDHex(w, "target", req.Target)
+	if !ok {
+		return
+	}
+	c := s.currentClient()
+	if c == nil {
+		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
+		return
+	}
+	if err := c.SuggestKX(invitee, target); err != nil {
+		http.Error(w, "suggest kx: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleTransReset asks `mediator` to forward a reset request to `target`.
+// The sub-nav user is the target (we want to repair the ratchet with them);
+// the user picks the mediator from their existing contacts. Wraps
+// client.RequestTransitiveReset (client_transreset.go:30).
+func (s *StatusServer) handleTransReset(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Mediator string `json:"mediator"`
+		Target   string `json:"target"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	mediator, ok := parseUIDHex(w, "mediator", req.Mediator)
+	if !ok {
+		return
+	}
+	target, ok := parseUIDHex(w, "target", req.Target)
+	if !ok {
+		return
+	}
+	c := s.currentClient()
+	if c == nil {
+		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
+		return
+	}
+	if err := c.RequestTransitiveReset(mediator, target); err != nil {
+		http.Error(w, "trans reset: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleAcceptSuggestion responds to an incoming KX suggestion by asking
+// the mediator (the contact who suggested) to introduce us to the target.
+// Wraps client.RequestMediateIdentity (client_autokx.go:43).
+func (s *StatusServer) handleAcceptSuggestion(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Mediator string `json:"mediator"`
+		Target   string `json:"target"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	mediator, ok := parseUIDHex(w, "mediator", req.Mediator)
+	if !ok {
+		return
+	}
+	target, ok := parseUIDHex(w, "target", req.Target)
+	if !ok {
+		return
+	}
+	c := s.currentClient()
+	if c == nil {
+		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
+		return
+	}
+	if err := c.RequestMediateIdentity(mediator, target); err != nil {
+		http.Error(w, "accept suggestion: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleNotifications streams JSONL events from the in-process notif bus to
+// a long-lived subscriber (the dashboard's bisonrelay_events.go). Each line
+// is one JSON object. The endpoint flushes after every event so consumers
+// see them in real time. Events brclientd publishes here are ones BR has no
+// upstream clientrpc stream for (e.g. OnKXSuggested) plus any other
+// daemon-side notifications we surface in the future.
+func (s *StatusServer) handleNotifications(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.Notifs == nil {
+		http.Error(w, "notification bus not configured", http.StatusServiceUnavailable)
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	ch, unsub := s.Notifs.Subscribe()
+	defer unsub()
+	enc := json.NewEncoder(w)
+	ctx := r.Context()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case evt, ok := <-ch:
+			if !ok {
+				return
+			}
+			if err := enc.Encode(evt); err != nil {
+				return
+			}
+			flusher.Flush()
+		}
+	}
+}
+
+// parseUIDHex decodes a hex-encoded ShortID, writing a 400 with the named
+// field on failure. Returns ok=false so callers can return immediately.
+func parseUIDHex(w http.ResponseWriter, field, hex string) (zkidentity.ShortID, bool) {
+	var uid zkidentity.ShortID
+	if err := uid.FromString(hex); err != nil {
+		http.Error(w, "invalid "+field+": "+err.Error(), http.StatusBadRequest)
+		return uid, false
+	}
+	return uid, true
 }
 
 // decodeUIDOnlyBody enforces POST, decodes a {uid: "<hex>"} JSON body, and
