@@ -69,6 +69,7 @@ func (s *StatusServer) Run(ctx context.Context) error {
 	mux.HandleFunc("/status", s.handleStatus)
 	mux.HandleFunc("/history/pm", s.handleHistoryPM)
 	mux.HandleFunc("/contacts", s.handleContacts)
+	mux.HandleFunc("/contacts/rename", s.handleRenameContact)
 	mux.HandleFunc("/invites/redeem-key", s.handleRedeemPaidInvite)
 	mux.HandleFunc("/files/send", s.handleSendFile)
 
@@ -184,6 +185,45 @@ func (s *StatusServer) handleContacts(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(struct {
 		Entries []*clientdb.AddressBookEntry `json:"entries"`
 	}{Entries: entries})
+}
+
+// handleRenameContact sets the local NickAlias for a contact. Pure
+// clientdb-only mutation; nothing is broadcast to the BR network. Mirrors
+// bruig's "Rename User" action (user_context_menu.dart) which calls
+// client.RenameUser at client_kx.go:606.
+func (s *StatusServer) handleRenameContact(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	c := s.currentClient()
+	if c == nil {
+		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
+		return
+	}
+	var req struct {
+		UID      string `json:"uid"`
+		NewNick  string `json:"new_nick"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	req.NewNick = strings.TrimSpace(req.NewNick)
+	if req.NewNick == "" {
+		http.Error(w, "new_nick is required", http.StatusBadRequest)
+		return
+	}
+	var uid zkidentity.ShortID
+	if err := uid.FromString(req.UID); err != nil {
+		http.Error(w, "invalid uid: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := c.RenameUser(uid, req.NewNick); err != nil {
+		http.Error(w, "rename user: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleRedeemPaidInvite accepts a bech32-encoded PaidInviteKey ("brpik1..."),
