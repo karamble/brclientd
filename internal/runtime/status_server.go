@@ -21,6 +21,7 @@ import (
 	"github.com/companyzero/bisonrelay/client"
 	"github.com/companyzero/bisonrelay/client/clientdb"
 	"github.com/companyzero/bisonrelay/client/clientintf"
+	"github.com/companyzero/bisonrelay/rpc"
 	"github.com/companyzero/bisonrelay/zkidentity"
 	"github.com/decred/slog"
 
@@ -83,6 +84,10 @@ func (s *StatusServer) Run(ctx context.Context) error {
 	mux.HandleFunc("/contacts/fetch-post", s.handleFetchPost)
 	mux.HandleFunc("/posts/feed", s.handlePostsFeed)
 	mux.HandleFunc("/posts/body", s.handlePostBody)
+	mux.HandleFunc("/posts/comments", s.handlePostComments)
+	mux.HandleFunc("/posts/comment", s.handlePostComment)
+	mux.HandleFunc("/posts/new", s.handlePostsNew)
+	mux.HandleFunc("/shared-files", s.handleSharedFiles)
 	mux.HandleFunc("/notifications", s.handleNotifications)
 	mux.HandleFunc("/invites/redeem-key", s.handleRedeemPaidInvite)
 	mux.HandleFunc("/files/send", s.handleSendFile)
@@ -641,6 +646,216 @@ func (s *StatusServer) handlePostBody(w http.ResponseWriter, r *http.Request) {
 	// "main" key (per BR's convention). We pass the whole map through
 	// so the dashboard can pick out what it needs.
 	_ = json.NewEncoder(w).Encode(pm)
+}
+
+// handleSharedFiles returns the list of files the local user has shared
+// (whether globally or with specific peers). Used by the BR editor's
+// "Link to shared content" picker so authors can reference paid or free
+// downloads inside a post body via --embed[download=,cost=,...]--.
+func (s *StatusServer) handleSharedFiles(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	c := s.currentClient()
+	if c == nil {
+		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
+		return
+	}
+	files, err := c.ListLocalSharedFiles()
+	if err != nil {
+		http.Error(w, "list shared files: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	type sharedFile struct {
+		FID      string `json:"fid"`
+		Filename string `json:"filename"`
+		Cost     uint64 `json:"cost"`
+		Size     uint64 `json:"size"`
+		Global   bool   `json:"global"`
+	}
+	out := make([]sharedFile, 0, len(files))
+	for _, f := range files {
+		out = append(out, sharedFile{
+			FID:      f.SF.FID.String(),
+			Filename: f.SF.Filename,
+			Cost:     f.Cost,
+			Size:     f.Size,
+			Global:   f.Global,
+		})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(struct {
+		Files []sharedFile `json:"files"`
+	}{Files: out})
+}
+
+// handlePostsNew authors a new post and shares it with our subscribers.
+// Body: {post (markdown body), descr?}. Returns the created summary so
+// the frontend can navigate to the detail view immediately.
+func (s *StatusServer) handlePostsNew(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	c := s.currentClient()
+	if c == nil {
+		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
+		return
+	}
+	var req struct {
+		Post  string `json:"post"`
+		Descr string `json:"descr"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	req.Post = strings.TrimSpace(req.Post)
+	if req.Post == "" {
+		http.Error(w, "post body is required", http.StatusBadRequest)
+		return
+	}
+	summ, err := c.CreatePost(req.Post, req.Descr)
+	if err != nil {
+		http.Error(w, "create post: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"id":         summ.ID.String(),
+		"from":       summ.From.String(),
+		"author_id":  summ.AuthorID.String(),
+		"author_nick": summ.AuthorNick,
+		"date":       summ.Date.Unix(),
+		"title":      summ.Title,
+	})
+}
+
+// handlePostComments returns the list of comment status updates on a
+// post. Filters out hearts and other non-comment status types so the
+// frontend can render a flat comment list directly.
+func (s *StatusServer) handlePostComments(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	c := s.currentClient()
+	if c == nil {
+		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
+		return
+	}
+	uidStr := strings.TrimSpace(r.URL.Query().Get("uid"))
+	pidStr := strings.TrimSpace(r.URL.Query().Get("pid"))
+	if uidStr == "" || pidStr == "" {
+		http.Error(w, "uid and pid query params are required", http.StatusBadRequest)
+		return
+	}
+	var uid zkidentity.ShortID
+	if err := uid.FromString(uidStr); err != nil {
+		http.Error(w, "invalid uid: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	var pid zkidentity.ShortID
+	if err := pid.FromString(pidStr); err != nil {
+		http.Error(w, "invalid pid: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	updates, err := c.ListPostStatusUpdates(uid, pid)
+	if err != nil {
+		http.Error(w, "list status updates: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	type comment struct {
+		StatusFrom string `json:"status_from"`
+		FromNick   string `json:"from_nick"`
+		Comment    string `json:"comment"`
+		Parent     string `json:"parent,omitempty"`
+		Timestamp  int64  `json:"timestamp"`
+		Identifier string `json:"identifier,omitempty"`
+	}
+	out := make([]comment, 0, len(updates))
+	for _, u := range updates {
+		body, ok := u.Attributes[rpc.RMPSComment]
+		if !ok || body == "" {
+			continue
+		}
+		var ts int64
+		if tsStr := u.Attributes[rpc.RMPTimestamp]; tsStr != "" {
+			if n, err := strconv.ParseInt(tsStr, 10, 64); err == nil {
+				ts = n
+			}
+		}
+		out = append(out, comment{
+			StatusFrom: u.Attributes[rpc.RMPStatusFrom],
+			FromNick:   u.Attributes[rpc.RMPFromNick],
+			Comment:    body,
+			Parent:     u.Attributes[rpc.RMPParent],
+			Timestamp:  ts,
+			Identifier: u.Attributes[rpc.RMPIdentifier],
+		})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(struct {
+		Comments []comment `json:"comments"`
+	}{Comments: out})
+}
+
+// handlePostComment posts a new comment on a remote user's post. Body
+// fields: uid (author of the post), pid (post id), comment (text), and
+// optional parent (parent comment id, for threading).
+func (s *StatusServer) handlePostComment(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	c := s.currentClient()
+	if c == nil {
+		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
+		return
+	}
+	var req struct {
+		UID     string `json:"uid"`
+		PID     string `json:"pid"`
+		Comment string `json:"comment"`
+		Parent  string `json:"parent"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	req.Comment = strings.TrimSpace(req.Comment)
+	if req.UID == "" || req.PID == "" || req.Comment == "" {
+		http.Error(w, "uid, pid, and comment are required", http.StatusBadRequest)
+		return
+	}
+	uid, ok := parseUIDHex(w, "uid", req.UID)
+	if !ok {
+		return
+	}
+	var pid zkidentity.ShortID
+	if err := pid.FromString(req.PID); err != nil {
+		http.Error(w, "invalid pid: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	var parent *zkidentity.ShortID
+	if req.Parent != "" {
+		var p zkidentity.ShortID
+		if err := p.FromString(req.Parent); err != nil {
+			http.Error(w, "invalid parent: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		parent = &p
+	}
+	cid, err := c.CommentPost(uid, pid, req.Comment, parent)
+	if err != nil {
+		http.Error(w, "comment post: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(struct {
+		Identifier string `json:"identifier"`
+	}{Identifier: cid.String()})
 }
 
 // handleNotifications streams JSONL events from the in-process notif bus to

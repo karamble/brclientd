@@ -151,6 +151,42 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 		}
 	}))
 
+	// OnPostStatusRcvdNtfn fires when a status update on a post (comment,
+	// heart, etc.) arrives — either ours arriving back via the relay or
+	// someone else's on a post we already know about. We surface comment
+	// status updates so the Feed can refresh the comment list live.
+	ntfns.Register(client.OnPostStatusRcvdNtfn(func(ru *client.RemoteUser, pid clientintf.PostID, statusFrom client.UserID, pms rpc.PostMetadataStatus) {
+		commentBody := pms.Attributes[rpc.RMPSComment]
+		if commentBody == "" {
+			// Ignore non-comment status updates (hearts, etc.) here.
+			return
+		}
+		nlog.Infof("Received comment on post %s from %s", pid, statusFrom)
+		if cfg.Notifs == nil {
+			return
+		}
+		var ts int64
+		if tsStr := pms.Attributes[rpc.RMPTimestamp]; tsStr != "" {
+			if n, err := strconv.ParseInt(tsStr, 10, 64); err == nil {
+				ts = n
+			}
+		}
+		cfg.Notifs.Publish(NotifEvent{
+			Type: "post-status-received",
+			Payload: map[string]any{
+				"author":      ru.ID().String(),
+				"author_nick": ru.Nick(),
+				"pid":         pid.String(),
+				"status_from": statusFrom.String(),
+				"from_nick":   pms.Attributes[rpc.RMPFromNick],
+				"comment":     commentBody,
+				"parent":      pms.Attributes[rpc.RMPParent],
+				"identifier":  pms.Attributes[rpc.RMPIdentifier],
+				"timestamp":   ts,
+			},
+		})
+	}))
+
 	// OnContentListReceived fires when a remote user replies to our
 	// ListUserContent request with the files they have shared. Forwarded
 	// verbatim to subscribers; the dashboard's modal hydrates from this.
