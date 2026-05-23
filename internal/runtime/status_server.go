@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -30,11 +32,12 @@ import (
 // /history/pm for paginated PM history reads (a wire-exposed wrapper around
 // clientdb.ReadLogPM since BR's clientrpc.proto has no history RPC).
 type StatusServer struct {
-	Log     slog.Logger
-	Certs   certgen.Triplet
-	Listen  string
-	Tracker *Tracker
-	DB      *clientdb.DB
+	Log       slog.Logger
+	Certs     certgen.Triplet
+	Listen    string
+	Tracker   *Tracker
+	DB        *clientdb.DB
+	UploadDir string
 
 	clientMu sync.RWMutex
 	client   *client.Client
@@ -67,6 +70,7 @@ func (s *StatusServer) Run(ctx context.Context) error {
 	mux.HandleFunc("/history/pm", s.handleHistoryPM)
 	mux.HandleFunc("/contacts", s.handleContacts)
 	mux.HandleFunc("/invites/redeem-key", s.handleRedeemPaidInvite)
+	mux.HandleFunc("/files/send", s.handleSendFile)
 
 	srv := &http.Server{
 		Addr:              s.Listen,
@@ -227,6 +231,135 @@ func (s *StatusServer) handleRedeemPaidInvite(w http.ResponseWriter, r *http.Req
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleSendFile accepts a multipart upload (fields: user, file) and hands
+// the file off to BR's file-transfer subsystem via c.SendFile. The uploaded
+// bytes are persisted under UploadDir; BR's send queue references that path
+// for the lifetime of the transfer (chunks are read on demand), so we keep
+// the file in place rather than auto-deleting after the call returns.
+func (s *StatusServer) handleSendFile(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	c := s.currentClient()
+	if c == nil {
+		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
+		return
+	}
+	if s.UploadDir == "" {
+		http.Error(w, "upload directory not configured", http.StatusInternalServerError)
+		return
+	}
+
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		http.Error(w, "parse multipart: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	defer r.MultipartForm.RemoveAll()
+
+	userField := strings.TrimSpace(r.FormValue("user"))
+	if userField == "" {
+		http.Error(w, "user field is required", http.StatusBadRequest)
+		return
+	}
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		http.Error(w, "file part missing: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	ru, err := c.UserByNick(userField)
+	if err != nil {
+		http.Error(w, "user lookup: "+err.Error(), http.StatusNotFound)
+		return
+	}
+
+	safeName := sanitizeUploadName(header.Filename)
+	if safeName == "" {
+		http.Error(w, "invalid filename", http.StatusBadRequest)
+		return
+	}
+	if err := os.MkdirAll(s.UploadDir, 0o700); err != nil {
+		http.Error(w, "mkdir uploads: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	storedPath, err := storeUpload(s.UploadDir, safeName, file)
+	if err != nil {
+		http.Error(w, "store upload: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if err := c.SendFile(ru.ID(), 0, storedPath, nil); err != nil {
+		_ = os.Remove(storedPath)
+		http.Error(w, "send file: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	// BR's sendPreparedSendqItemListSync waits for the relay to ack each
+	// chunk before SendFile returns, so once we're here every byte has
+	// been read from the source file and the file is no longer referenced
+	// by the send queue. BR does not clean these up itself.
+	_ = os.Remove(storedPath)
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"filename": safeName,
+		"size":     header.Size,
+	})
+}
+
+func sanitizeUploadName(name string) string {
+	name = filepath.Base(strings.TrimSpace(name))
+	if name == "" || name == "." || name == ".." {
+		return ""
+	}
+	out := make([]rune, 0, len(name))
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			out = append(out, r)
+		case r == '.' || r == '_' || r == '-' || r == ' ':
+			out = append(out, r)
+		}
+	}
+	if len(out) == 0 {
+		return ""
+	}
+	if len(out) > 200 {
+		out = out[:200]
+	}
+	return string(out)
+}
+
+func storeUpload(dir, name string, src io.Reader) (string, error) {
+	candidate := filepath.Join(dir, name)
+	if _, err := os.Stat(candidate); errors.Is(err, os.ErrNotExist) {
+		return writeUpload(candidate, src)
+	}
+	ext := filepath.Ext(name)
+	stem := strings.TrimSuffix(name, ext)
+	for i := 1; i < 1000; i++ {
+		c := filepath.Join(dir, fmt.Sprintf("%s-%d%s", stem, i, ext))
+		if _, err := os.Stat(c); errors.Is(err, os.ErrNotExist) {
+			return writeUpload(c, src)
+		}
+	}
+	return "", errors.New("could not find a free upload filename")
+}
+
+func writeUpload(path string, src io.Reader) (string, error) {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	if _, err := io.Copy(f, src); err != nil {
+		_ = os.Remove(path)
+		return "", err
+	}
+	return path, nil
 }
 
 func parsePositiveInt(s string, fallback, max int) int {

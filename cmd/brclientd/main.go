@@ -93,6 +93,7 @@ func run(args []string) error {
 		DB:                db,
 		DcrlndPay:         pc,
 		ReplayMsgLogsRoot: filepath.Join(cfg.DataDir, "replaymsglog"),
+		UploadDir:         filepath.Join(cfg.DataDir, "uploads"),
 	})
 	if err != nil && !errors.Is(err, context.Canceled) {
 		return err

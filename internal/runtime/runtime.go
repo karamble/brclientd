@@ -41,6 +41,7 @@ type Config struct {
 	DB                *clientdb.DB
 	DcrlndPay         *client.DcrlnPaymentClient
 	ReplayMsgLogsRoot string
+	UploadDir         string
 }
 
 // Run brings up the /status HTTP server and clientrpc.VersionService
@@ -60,11 +61,12 @@ func Run(ctx context.Context, cfg Config) error {
 	// 7676 in the no-identity case and would conflict with an early
 	// clientrpc bind.
 	statusSrv := &StatusServer{
-		Log:     cfg.LogFn("STAT"),
-		Certs:   cfg.Certs,
-		Listen:  cfg.StatusListen,
-		Tracker: tracker,
-		DB:      cfg.DB,
+		Log:       cfg.LogFn("STAT"),
+		Certs:     cfg.Certs,
+		Listen:    cfg.StatusListen,
+		Tracker:   tracker,
+		DB:        cfg.DB,
+		UploadDir: cfg.UploadDir,
 	}
 	g.Go(func() error { return statusSrv.Run(gctx) })
 
