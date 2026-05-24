@@ -155,38 +155,52 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 
 	// OnPostStatusRcvdNtfn fires when a status update on a post (comment,
 	// heart, etc.) arrives — either ours arriving back via the relay or
-	// someone else's on a post we already know about. We surface comment
-	// status updates so the Feed can refresh the comment list live.
+	// someone else's on a post we already know about. We fan it out as
+	// either post-status-received (comments) or post-heart-received
+	// (hearts) so each Feed surface can react cheaply.
 	ntfns.Register(client.OnPostStatusRcvdNtfn(func(ru *client.RemoteUser, pid clientintf.PostID, statusFrom client.UserID, pms rpc.PostMetadataStatus) {
-		commentBody := pms.Attributes[rpc.RMPSComment]
-		if commentBody == "" {
-			// Ignore non-comment status updates (hearts, etc.) here.
-			return
-		}
-		nlog.Infof("Received comment on post %s from %s", pid, statusFrom)
 		if cfg.Notifs == nil {
 			return
 		}
-		var ts int64
-		if tsStr := pms.Attributes[rpc.RMPTimestamp]; tsStr != "" {
-			if n, err := strconv.ParseInt(tsStr, 10, 64); err == nil {
-				ts = n
+		commentBody := pms.Attributes[rpc.RMPSComment]
+		heartVal := pms.Attributes[rpc.RMPSHeart]
+		if commentBody != "" {
+			nlog.Infof("Received comment on post %s from %s", pid, statusFrom)
+			var ts int64
+			if tsStr := pms.Attributes[rpc.RMPTimestamp]; tsStr != "" {
+				if n, err := strconv.ParseInt(tsStr, 10, 64); err == nil {
+					ts = n
+				}
 			}
+			cfg.Notifs.Publish(NotifEvent{
+				Type: "post-status-received",
+				Payload: map[string]any{
+					"author":      ru.ID().String(),
+					"author_nick": ru.Nick(),
+					"pid":         pid.String(),
+					"status_from": statusFrom.String(),
+					"from_nick":   pms.Attributes[rpc.RMPFromNick],
+					"comment":     commentBody,
+					"parent":      pms.Attributes[rpc.RMPParent],
+					"identifier":  pms.Attributes[rpc.RMPIdentifier],
+					"timestamp":   ts,
+				},
+			})
+			return
 		}
-		cfg.Notifs.Publish(NotifEvent{
-			Type: "post-status-received",
-			Payload: map[string]any{
-				"author":      ru.ID().String(),
-				"author_nick": ru.Nick(),
-				"pid":         pid.String(),
-				"status_from": statusFrom.String(),
-				"from_nick":   pms.Attributes[rpc.RMPFromNick],
-				"comment":     commentBody,
-				"parent":      pms.Attributes[rpc.RMPParent],
-				"identifier":  pms.Attributes[rpc.RMPIdentifier],
-				"timestamp":   ts,
-			},
-		})
+		if heartVal != "" {
+			nlog.Infof("Received heart=%s on post %s from %s", heartVal, pid, statusFrom)
+			cfg.Notifs.Publish(NotifEvent{
+				Type: "post-heart-received",
+				Payload: map[string]any{
+					"author":      ru.ID().String(),
+					"author_nick": ru.Nick(),
+					"pid":         pid.String(),
+					"status_from": statusFrom.String(),
+					"value":       heartVal,
+				},
+			})
+		}
 	}))
 
 	// OnFileDownloadProgress fires per chunk-batch during a file

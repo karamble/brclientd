@@ -88,6 +88,8 @@ func (s *StatusServer) Run(ctx context.Context) error {
 	mux.HandleFunc("/posts/body", s.handlePostBody)
 	mux.HandleFunc("/posts/comments", s.handlePostComments)
 	mux.HandleFunc("/posts/comment", s.handlePostComment)
+	mux.HandleFunc("/posts/hearts", s.handlePostHearts)
+	mux.HandleFunc("/posts/heart", s.handlePostHeart)
 	mux.HandleFunc("/posts/new", s.handlePostsNew)
 	mux.HandleFunc("/shared-files", s.handleSharedFiles)
 	mux.HandleFunc("/shared-files/add", s.handleSharedFileAdd)
@@ -1098,6 +1100,111 @@ func (s *StatusServer) handlePostComment(w http.ResponseWriter, r *http.Request)
 	_ = json.NewEncoder(w).Encode(struct {
 		Identifier string `json:"identifier"`
 	}{Identifier: cid.String()})
+}
+
+// handlePostHearts returns the current heart count and whether the local
+// identity's most recent heart status update on that post left it in the
+// "hearted" state. Walks the same ListPostStatusUpdates that /stats/posts
+// uses, with toggle semantics from rpc.routedrpc.go (1 adds, 0 removes).
+func (s *StatusServer) handlePostHearts(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	c := s.currentClient()
+	if c == nil {
+		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
+		return
+	}
+	uidStr := strings.TrimSpace(r.URL.Query().Get("uid"))
+	pidStr := strings.TrimSpace(r.URL.Query().Get("pid"))
+	if uidStr == "" || pidStr == "" {
+		http.Error(w, "uid and pid query params are required", http.StatusBadRequest)
+		return
+	}
+	var uid zkidentity.ShortID
+	if err := uid.FromString(uidStr); err != nil {
+		http.Error(w, "invalid uid: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	var pid zkidentity.ShortID
+	if err := pid.FromString(pidStr); err != nil {
+		http.Error(w, "invalid pid: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	updates, err := c.ListPostStatusUpdates(uid, pid)
+	if err != nil {
+		http.Error(w, "list status updates: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	myID := c.PublicID().String()
+	count := 0
+	heartedByMe := false
+	for _, u := range updates {
+		if u.Attributes == nil {
+			continue
+		}
+		mode, ok := u.Attributes[rpc.RMPSHeart]
+		if !ok {
+			continue
+		}
+		switch mode {
+		case rpc.RMPSHeartYes:
+			count++
+		case rpc.RMPSHeartNo:
+			if count > 0 {
+				count--
+			}
+		default:
+			continue
+		}
+		if u.Attributes[rpc.RMPStatusFrom] == myID {
+			heartedByMe = mode == rpc.RMPSHeartYes
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(struct {
+		Count       int  `json:"count"`
+		HeartedByMe bool `json:"hearted_by_me"`
+	}{Count: count, HeartedByMe: heartedByMe})
+}
+
+// handlePostHeart toggles the local identity's heart on a remote post.
+// Body: {uid, pid, heart bool}. Delegates to client.HeartPost which sends
+// a status update with RMPSHeartYes / RMPSHeartNo.
+func (s *StatusServer) handlePostHeart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	c := s.currentClient()
+	if c == nil {
+		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
+		return
+	}
+	var req struct {
+		UID   string `json:"uid"`
+		PID   string `json:"pid"`
+		Heart bool   `json:"heart"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	uid, ok := parseUIDHex(w, "uid", req.UID)
+	if !ok {
+		return
+	}
+	var pid zkidentity.ShortID
+	if err := pid.FromString(req.PID); err != nil {
+		http.Error(w, "invalid pid: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := c.HeartPost(uid, pid, req.Heart); err != nil {
+		http.Error(w, "heart post: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleNotifications streams JSONL events from the in-process notif bus to
