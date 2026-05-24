@@ -565,7 +565,7 @@ func (s *StatusServer) handleFetchPost(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if subscribed {
-		if err := c.GetUserPost(uid, pid, false); err != nil {
+		if err := c.GetUserPost(uid, pid, true); err != nil {
 			http.Error(w, "get user post: "+err.Error(), http.StatusBadGateway)
 			return
 		}
