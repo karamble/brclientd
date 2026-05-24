@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -118,7 +119,7 @@ func (s *StatusServer) handlePagesFetch(w http.ResponseWriter, r *http.Request) 
 	for {
 		select {
 		case <-ctx.Done():
-			http.Error(w, "timed out waiting for page reply", http.StatusGatewayTimeout)
+			http.Error(w, "no page reply within 30s: the peer may not host pages, or may be offline", http.StatusGatewayTimeout)
 			return
 		case evt, ok := <-ch:
 			if !ok {
@@ -195,9 +196,11 @@ func pathsEqual(a, b []string) bool {
 	return true
 }
 
-// pageNameRE matches a single flat markdown filename: no slashes, must end in
-// ".md". Subdirectory hosting is a follow-up.
-var pageNameRE = regexp.MustCompile(`^[A-Za-z0-9_.-]+\.md$`)
+// pageNameRE matches a markdown filename, optionally under subdirectories:
+// slash-separated segments of [A-Za-z0-9_.-], ending in ".md". With no leading
+// slash and the ".." guard in validatePageName, a matching name can only
+// resolve within PagesDir.
+var pageNameRE = regexp.MustCompile(`^([A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.md$`)
 
 func validatePageName(name string) (string, bool) {
 	name = strings.TrimSpace(name)
@@ -217,14 +220,9 @@ func (s *StatusServer) handlePagesLocalList(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "pages dir not configured", http.StatusServiceUnavailable)
 		return
 	}
-	entries, err := os.ReadDir(s.PagesDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]any{"pages": []any{}})
-			return
-		}
-		http.Error(w, "read pages dir: "+err.Error(), http.StatusBadGateway)
+	if _, err := os.Stat(s.PagesDir); os.IsNotExist(err) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"pages": []any{}})
 		return
 	}
 	type pageInfo struct {
@@ -232,16 +230,27 @@ func (s *StatusServer) handlePagesLocalList(w http.ResponseWriter, r *http.Reque
 		Size     int64  `json:"size"`
 		Modified int64  `json:"modified"`
 	}
-	pages := make([]pageInfo, 0, len(entries))
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
-			continue
+	// Walk subdirectories so hosted pages organized in folders (docs/intro.md)
+	// are listed with their path relative to PagesDir.
+	pages := make([]pageInfo, 0)
+	err := filepath.WalkDir(s.PagesDir, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil || d.IsDir() || !strings.HasSuffix(d.Name(), ".md") {
+			return nil
 		}
-		info, err := e.Info()
+		rel, err := filepath.Rel(s.PagesDir, path)
 		if err != nil {
-			continue
+			return nil
 		}
-		pages = append(pages, pageInfo{Name: e.Name(), Size: info.Size(), Modified: info.ModTime().Unix()})
+		info, err := d.Info()
+		if err != nil {
+			return nil
+		}
+		pages = append(pages, pageInfo{Name: filepath.ToSlash(rel), Size: info.Size(), Modified: info.ModTime().Unix()})
+		return nil
+	})
+	if err != nil {
+		http.Error(w, "read pages dir: "+err.Error(), http.StatusBadGateway)
+		return
 	}
 	sort.Slice(pages, func(i, j int) bool { return pages[i].Name < pages[j].Name })
 	w.Header().Set("Content-Type", "application/json")
@@ -300,11 +309,13 @@ func (s *StatusServer) handlePagesLocalSave(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "invalid page name", http.StatusBadRequest)
 		return
 	}
-	if err := os.MkdirAll(s.PagesDir, 0o700); err != nil {
+	full := filepath.Join(s.PagesDir, name)
+	// Create any parent directories so subdirectory pages (docs/intro.md) save.
+	if err := os.MkdirAll(filepath.Dir(full), 0o700); err != nil {
 		http.Error(w, "create pages dir: "+err.Error(), http.StatusBadGateway)
 		return
 	}
-	if err := os.WriteFile(filepath.Join(s.PagesDir, name), []byte(req.Content), 0o600); err != nil {
+	if err := os.WriteFile(full, []byte(req.Content), 0o600); err != nil {
 		http.Error(w, "write page: "+err.Error(), http.StatusBadGateway)
 		return
 	}
