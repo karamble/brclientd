@@ -122,6 +122,7 @@ func (s *StatusServer) Run(ctx context.Context) error {
 	mux.HandleFunc("/store/products/delete", s.handleStoreProductDelete)
 	mux.HandleFunc("/store/orders", s.handleStoreOrders)
 	mux.HandleFunc("/store/orders/status", s.handleStoreOrderStatus)
+	mux.HandleFunc("/store/orders/comment", s.handleStoreOrderComment)
 	mux.HandleFunc("/store/files/upload", s.handleStoreFileUpload)
 	mux.HandleFunc("/notifications", s.handleNotifications)
 	mux.HandleFunc("/invites/redeem-key", s.handleRedeemPaidInvite)
@@ -1313,6 +1314,34 @@ func (s *StatusServer) handleStoreOrderStatus(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if err := ctrl.setOrderStatus(req.UID, req.ID, req.Status); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleStoreOrderComment appends a merchant comment to an order and DMs the
+// buyer. Body: {uid, id, comment}.
+func (s *StatusServer) handleStoreOrderComment(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	ctrl := s.currentStoreController()
+	if ctrl == nil {
+		http.Error(w, "store controller not yet ready", http.StatusServiceUnavailable)
+		return
+	}
+	var req struct {
+		UID     string `json:"uid"`
+		ID      uint64 `json:"id"`
+		Comment string `json:"comment"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := ctrl.addOrderComment(req.UID, req.ID, req.Comment); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}

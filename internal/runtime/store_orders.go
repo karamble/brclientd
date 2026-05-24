@@ -12,8 +12,10 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/companyzero/bisonrelay/client/resources/simplestore"
+	"github.com/companyzero/bisonrelay/zkidentity"
 )
 
 var storeUIDRE = regexp.MustCompile(`^[0-9a-fA-F]{64}$`)
@@ -89,10 +91,31 @@ func (s *storeController) orderPath(uidHex string, id uint64) (string, error) {
 	return filepath.Join(s.ordersDir(), uidHex, fmt.Sprintf("order-%08d.json", id)), nil
 }
 
-// setOrderStatus updates one order's status in place (atomic temp+rename). Note
-// this does not push a Bison Relay DM to the customer the way the store's own
-// admin flow does; the customer sees the new status when they next view the
-// order.
+func writeStoreOrder(path string, o *simplestore.Order) error {
+	data, err := json.Marshal(o)
+	if err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// dmBuyer best-effort DMs the order's buyer. Errors are ignored (the order
+// file is the source of truth; a failed DM should not fail the write).
+func (s *storeController) dmBuyer(uidHex, msg string) {
+	var uid zkidentity.ShortID
+	if err := uid.FromString(uidHex); err != nil {
+		return
+	}
+	_ = s.client.PM(uid, msg)
+}
+
+// setOrderStatus updates one order's status in place (atomic temp+rename) and
+// DMs the buyer. The store's own admin flow notifies via StatusChanged; we
+// write the file directly, so we send the DM here.
 func (s *storeController) setOrderStatus(uidHex string, id uint64, status string) error {
 	if !storeOrderStatuses[status] {
 		return fmt.Errorf("invalid status %q", status)
@@ -106,13 +129,36 @@ func (s *storeController) setOrderStatus(uidHex string, id uint64, status string
 		return fmt.Errorf("read order: %w", err)
 	}
 	o.Status = simplestore.OrderStatus(status)
-	data, err := json.Marshal(o)
+	if err := writeStoreOrder(path, o); err != nil {
+		return err
+	}
+	s.dmBuyer(uidHex, fmt.Sprintf("Your order #%d is now %q.", id, status))
+	return nil
+}
+
+// addOrderComment appends a merchant comment to an order and DMs the buyer
+// (simplestore appends the comment but leaves notifying the buyer a TODO).
+func (s *storeController) addOrderComment(uidHex string, id uint64, comment string) error {
+	comment = strings.TrimSpace(comment)
+	if comment == "" {
+		return fmt.Errorf("comment is empty")
+	}
+	path, err := s.orderPath(uidHex, id)
 	if err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+	o, err := readStoreOrder(path)
+	if err != nil {
+		return fmt.Errorf("read order: %w", err)
+	}
+	o.Comments = append(o.Comments, simplestore.OrderComment{
+		Timestamp: time.Now(),
+		FromAdmin: true,
+		Comment:   comment,
+	})
+	if err := writeStoreOrder(path, o); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	s.dmBuyer(uidHex, fmt.Sprintf("New message about your order #%d: %s", id, comment))
+	return nil
 }
