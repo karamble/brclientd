@@ -36,10 +36,10 @@ type BRClientCfg struct {
 	AudioRouter     *RTDTAudioRouter
 	LogFn           func(subsys string) slog.Logger
 	IdentityChan    <-chan *zkidentity.FullIdentity
-	// PagesDir is the on-disk root from which this client hosts its own
-	// markdown pages (the brclient "pages:" equivalent). Served to remote
-	// peers and to ourselves via client.Config.ResourcesProvider.
-	PagesDir string
+	// ResProvider is the resource provider bound at the client's root. The
+	// caller passes a switchableProvider the store controller flips between
+	// filesystem-hosted pages and a simplestore at runtime.
+	ResProvider resources.Provider
 }
 
 // startBRClient builds the BR client config, instantiates the client, and
@@ -834,12 +834,11 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 	// is also what FetchLocalResource fulfills against when we view our own
 	// pages. Without it, ResourcesProvider stays nil and both hosting and
 	// local fetches are disabled.
-	var resProvider resources.Provider
-	if cfg.PagesDir != "" {
-		resRouter := resources.NewRouter()
-		resRouter.BindPrefixPath([]string{}, resources.NewFilesystemResource(cfg.PagesDir, cfg.LogFn("PAGE")))
-		resProvider = resRouter
-	}
+	// The resource provider is supplied by the caller: a switchableProvider the
+	// store controller flips between filesystem-hosted pages and a simplestore
+	// at runtime. It is also what FetchLocalResource fulfills against for our
+	// own pages. Nil disables hosting + local fetches.
+	resProvider := cfg.ResProvider
 
 	brCfg := client.Config{
 		DB:                     cfg.DB,

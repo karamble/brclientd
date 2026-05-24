@@ -46,6 +46,9 @@ type StatusServer struct {
 
 	clientMu sync.RWMutex
 	client   *client.Client
+
+	storeCtrlMu sync.RWMutex
+	storeCtrl   *storeController
 }
 
 // SetClient attaches a live *client.Client to the StatusServer once the BR
@@ -55,6 +58,20 @@ func (s *StatusServer) SetClient(c *client.Client) {
 	s.clientMu.Lock()
 	defer s.clientMu.Unlock()
 	s.client = c
+}
+
+// SetStoreController wires the resource-hosting mode controller so /store/mode
+// can read and flip between pages and simplestore hosting.
+func (s *StatusServer) SetStoreController(ctrl *storeController) {
+	s.storeCtrlMu.Lock()
+	defer s.storeCtrlMu.Unlock()
+	s.storeCtrl = ctrl
+}
+
+func (s *StatusServer) currentStoreController() *storeController {
+	s.storeCtrlMu.RLock()
+	defer s.storeCtrlMu.RUnlock()
+	return s.storeCtrl
 }
 
 func (s *StatusServer) currentClient() *client.Client {
@@ -100,6 +117,7 @@ func (s *StatusServer) Run(ctx context.Context) error {
 	mux.HandleFunc("/content/get", s.handleContentGet)
 	mux.HandleFunc("/content/file", s.handleContentFile)
 	mux.HandleFunc("/rates", s.handleRates)
+	mux.HandleFunc("/store/mode", s.handleStoreMode)
 	mux.HandleFunc("/notifications", s.handleNotifications)
 	mux.HandleFunc("/invites/redeem-key", s.handleRedeemPaidInvite)
 	mux.HandleFunc("/files/send", s.handleSendFile)
@@ -1106,6 +1124,49 @@ var rateState struct {
 	btcUSD    float64
 	source    string
 	updatedAt time.Time
+}
+
+// handleStoreMode reports (GET) or switches (POST) this node's resource-hosting
+// mode: static pages (enabled=false) or a simplestore (enabled=true). POST
+// body: {enabled, pay_type, account, ship_charge}. Switching the store off
+// stops its invoice watcher, so orders awaiting payment will not auto-settle
+// until it is re-enabled.
+func (s *StatusServer) handleStoreMode(w http.ResponseWriter, r *http.Request) {
+	ctrl := s.currentStoreController()
+	if ctrl == nil {
+		http.Error(w, "store controller not yet ready", http.StatusServiceUnavailable)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		writeStoreMode(w, ctrl.Mode())
+	case http.MethodPost:
+		var req storeMode
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if req.Enabled && req.PayType != "ln" && req.PayType != "onchain" {
+			req.PayType = "ln"
+		}
+		if err := ctrl.SetMode(req); err != nil {
+			http.Error(w, "set store mode: "+err.Error(), http.StatusBadGateway)
+			return
+		}
+		writeStoreMode(w, ctrl.Mode())
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func writeStoreMode(w http.ResponseWriter, m storeMode) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"enabled":     m.Enabled,
+		"pay_type":    m.PayType,
+		"account":     m.Account,
+		"ship_charge": m.ShipCharge,
+	})
 }
 
 // krakenMinInterval throttles the last-resort Kraken fallback: at most one

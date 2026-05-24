@@ -90,6 +90,11 @@ func run(args []string) error {
 		UploadDir:         filepath.Join(cfg.DataDir, "uploads"),
 		SeederCachePath:   filepath.Join(cfg.DataDir, "seeder-cache.json"),
 		PagesDir:          filepath.Join(cfg.DataDir, "pages"),
+		StoreEnabled:      cfg.SimpleStore.Enabled,
+		StoreDir:          filepath.Join(cfg.DataDir, "store"),
+		StorePayType:      cfg.SimpleStore.PayType,
+		StoreAccount:      cfg.SimpleStore.Account,
+		StoreShipCharge:   cfg.SimpleStore.ShipCharge,
 	})
 	if err != nil && !errors.Is(err, context.Canceled) {
 		return err

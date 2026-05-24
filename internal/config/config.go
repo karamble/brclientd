@@ -54,6 +54,16 @@ type StatusOptions struct {
 	Listen string `long:"listen" description:"Address the /status HTTP endpoint binds to (default: 0.0.0.0:7677)"`
 }
 
+// SimpleStoreOptions configure the optional simplestore resource host (config
+// section `[simplestore]`). When Enabled, this node serves a store over the
+// relay instead of static pages (BR binds one resource provider at the root).
+type SimpleStoreOptions struct {
+	Enabled    bool    `long:"enabled" description:"Host a simplestore over the relay instead of static pages"`
+	PayType    string  `long:"paytype" description:"How to charge for orders: ln or onchain (default: ln)"`
+	Account    string  `long:"account" description:"Wallet account used for on-chain order addresses"`
+	ShipCharge float64 `long:"shipcharge" description:"Flat shipping surcharge in USD added to each order"`
+}
+
 // Config is the parsed runtime configuration.
 type Config struct {
 	ShowVersion bool   `short:"V" long:"version" description:"Display version information and exit"`
@@ -66,9 +76,10 @@ type Config struct {
 	SimNet      bool   `long:"simnet" description:"Use the simulation network"`
 	BRServer    string `long:"brserver" description:"Bison Relay relay server address"`
 
-	Dcrlnd    DcrlndOptions    `group:"dcrlnd options" namespace:"dcrlnd"`
-	ClientRPC ClientRPCOptions `group:"clientrpc options" namespace:"clientrpc"`
-	Status    StatusOptions    `group:"status options" namespace:"status"`
+	Dcrlnd      DcrlndOptions      `group:"dcrlnd options" namespace:"dcrlnd"`
+	ClientRPC   ClientRPCOptions   `group:"clientrpc options" namespace:"clientrpc"`
+	Status      StatusOptions      `group:"status options" namespace:"status"`
+	SimpleStore SimpleStoreOptions `group:"simplestore options" namespace:"simplestore"`
 }
 
 // Network reports the active network as a string used in default sub-paths.
@@ -158,6 +169,9 @@ func Load(args []string, version string) (*Config, error) {
 	}
 	if cfg.Status.Listen == "" {
 		cfg.Status.Listen = "0.0.0.0:" + DefaultStatusPort
+	}
+	if cfg.SimpleStore.PayType == "" {
+		cfg.SimpleStore.PayType = "ln"
 	}
 
 	if err := ensureDir(cfg.AppDataDir); err != nil {

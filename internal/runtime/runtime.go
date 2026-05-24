@@ -47,6 +47,15 @@ type Config struct {
 	UploadDir         string
 	SeederCachePath   string
 	PagesDir          string
+
+	// SimpleStore hosting. When StoreEnabled, the node serves a simplestore
+	// from StoreDir over the relay instead of static pages (one resource
+	// provider binds at the root). StorePayType is "ln" or "onchain".
+	StoreEnabled    bool
+	StoreDir        string
+	StorePayType    string
+	StoreAccount    string
+	StoreShipCharge float64
 }
 
 // Run brings up the /status HTTP server and clientrpc.VersionService
@@ -67,10 +76,6 @@ func Run(ctx context.Context, cfg Config) error {
 	// identity check below, because the pre-setup endpoint claims port
 	// 7676 in the no-identity case and would conflict with an early
 	// clientrpc bind.
-	if err := ensurePagesDir(cfg.PagesDir); err != nil {
-		return fmt.Errorf("prepare pages dir: %w", err)
-	}
-
 	statusSrv := &StatusServer{
 		Log:         cfg.LogFn("STAT"),
 		Certs:       cfg.Certs,
@@ -104,6 +109,10 @@ func Run(ctx context.Context, cfg Config) error {
 
 	identityChan := make(chan *zkidentity.FullIdentity, 1)
 
+	// The store controller flips this provider between filesystem pages and a
+	// simplestore at runtime; the BR client only ever sees the one wrapper.
+	storeProv := &switchableProvider{}
+
 	c, err := startBRClient(BRClientCfg{
 		DB:              cfg.DB,
 		DcrlndPay:       dcrlndPay,
@@ -114,12 +123,27 @@ func Run(ctx context.Context, cfg Config) error {
 		AudioRouter:     audioRouter,
 		LogFn:           cfg.LogFn,
 		IdentityChan:    identityChan,
-		PagesDir:        cfg.PagesDir,
+		ResProvider:     storeProv,
 	})
 	if err != nil {
 		return err
 	}
 	statusSrv.SetClient(c)
+
+	// Bind the resource provider for the persisted/default hosting mode (pages
+	// or simplestore) now that the client exists, and expose the controller so
+	// the dashboard can flip modes at runtime.
+	storeCtrl := newStoreController(gctx, storeProv, c, dcrlndPay, notifs, cfg.LogFn,
+		cfg.PagesDir, cfg.StoreDir, storeMode{
+			Enabled:    cfg.StoreEnabled,
+			PayType:    cfg.StorePayType,
+			Account:    cfg.StoreAccount,
+			ShipCharge: cfg.StoreShipCharge,
+		})
+	statusSrv.SetStoreController(storeCtrl)
+	if err := storeCtrl.applyInitial(); err != nil {
+		return err
+	}
 
 	g.Go(func() error {
 		err := c.Run(gctx)
