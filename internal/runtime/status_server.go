@@ -257,8 +257,8 @@ func (s *StatusServer) handleRenameContact(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	var req struct {
-		UID      string `json:"uid"`
-		NewNick  string `json:"new_nick"`
+		UID     string `json:"uid"`
+		NewNick string `json:"new_nick"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
@@ -967,12 +967,12 @@ func (s *StatusServer) handlePostsNew(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"id":         summ.ID.String(),
-		"from":       summ.From.String(),
-		"author_id":  summ.AuthorID.String(),
+		"id":          summ.ID.String(),
+		"from":        summ.From.String(),
+		"author_id":   summ.AuthorID.String(),
 		"author_nick": summ.AuthorNick,
-		"date":       summ.Date.Unix(),
-		"title":      summ.Title,
+		"date":        summ.Date.Unix(),
+		"title":       summ.Title,
 	})
 }
 
@@ -1534,8 +1534,8 @@ func policyFromSession(c *client.Client) policyOut {
 type topContactOut struct {
 	UID      string `json:"uid"`
 	Nick     string `json:"nick"`
-	Sent     int64  `json:"sent_atoms"`
-	Received int64  `json:"received_atoms"`
+	Sent     int64  `json:"sent_matoms"`
+	Received int64  `json:"received_matoms"`
 }
 
 // handleStatsOverview is the compact summary the Stats landing page renders
@@ -1634,9 +1634,9 @@ func (s *StatusServer) handleStatsOverview(w http.ResponseWriter, r *http.Reques
 		PostsAuthored    int             `json:"posts_authored"`
 		SubscriptionsCnt int             `json:"subscriptions_count"`
 		SubscribersCnt   int             `json:"subscribers_count"`
-		TotalSentAtoms   int64           `json:"total_sent_atoms"`
-		TotalRecvAtoms   int64           `json:"total_received_atoms"`
-		TotalFeesAtoms   int64           `json:"total_fees_atoms"`
+		TotalSentMAtoms  int64           `json:"total_sent_matoms"`
+		TotalRecvMAtoms  int64           `json:"total_received_matoms"`
+		TotalFeesMAtoms  int64           `json:"total_fees_matoms"`
 		RmqP50Ns         int64           `json:"rmq_p50_ns"`
 		TopContacts      []topContactOut `json:"top_contacts"`
 	}{
@@ -1649,9 +1649,9 @@ func (s *StatusServer) handleStatsOverview(w http.ResponseWriter, r *http.Reques
 		PostsAuthored:    authoredCount,
 		SubscriptionsCnt: len(subs),
 		SubscribersCnt:   len(subscribers),
-		TotalSentAtoms:   sumSent,
-		TotalRecvAtoms:   sumRecv,
-		TotalFeesAtoms:   sumFees,
+		TotalSentMAtoms:  sumSent,
+		TotalRecvMAtoms:  sumRecv,
+		TotalFeesMAtoms:  sumFees,
 		RmqP50Ns:         p50Ns,
 		TopContacts:      top,
 	}
@@ -1679,12 +1679,12 @@ func (s *StatusServer) handleStatsPayments(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	type userRow struct {
-		UID          string                     `json:"uid"`
-		Nick         string                     `json:"nick"`
-		Sent         int64                      `json:"sent_atoms"`
-		Received     int64                      `json:"received_atoms"`
-		Fees         int64                      `json:"fees_atoms"`
-		Breakdowns   []clientdb.PayStatsSummary `json:"breakdowns,omitempty"`
+		UID        string                     `json:"uid"`
+		Nick       string                     `json:"nick"`
+		Sent       int64                      `json:"sent_matoms"`
+		Received   int64                      `json:"received_matoms"`
+		Fees       int64                      `json:"fees_matoms"`
+		Breakdowns []clientdb.PayStatsSummary `json:"breakdowns,omitempty"`
 	}
 	rows := make([]userRow, 0, len(stats))
 	for uid, ps := range stats {
@@ -1701,8 +1701,8 @@ func (s *StatusServer) handleStatsPayments(w http.ResponseWriter, r *http.Reques
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(struct {
-		Users     []userRow     `json:"users"`
-		RmqRttQs  []quantileOut `json:"rmq_rtt_quantiles"`
+		Users    []userRow     `json:"users"`
+		RmqRttQs []quantileOut `json:"rmq_rtt_quantiles"`
 	}{
 		Users:    rows,
 		RmqRttQs: toQuantileOut(c.RMQTimingStat()),
