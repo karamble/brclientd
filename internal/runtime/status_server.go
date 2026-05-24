@@ -43,6 +43,8 @@ type StatusServer struct {
 	PagesDir    string
 	Notifs      *notifBus
 	AudioRouter *RTDTAudioRouter
+	AppName     string
+	AppVersion  string
 
 	clientMu sync.RWMutex
 	client   *client.Client
@@ -93,6 +95,8 @@ func (s *StatusServer) Run(ctx context.Context) error {
 	mux.HandleFunc("/contacts", s.handleContacts)
 	mux.HandleFunc("/contacts/rename", s.handleRenameContact)
 	mux.HandleFunc("/contacts/kx-reset", s.handleKXReset)
+	mux.HandleFunc("/contacts/block", s.handleBlockContact)
+	mux.HandleFunc("/contacts/ignore", s.handleIgnoreContact)
 	mux.HandleFunc("/contacts/handshake", s.handleHandshake)
 	mux.HandleFunc("/contacts/suggest-kx", s.handleSuggestKX)
 	mux.HandleFunc("/contacts/trans-reset", s.handleTransReset)
@@ -124,7 +128,18 @@ func (s *StatusServer) Run(ctx context.Context) error {
 	mux.HandleFunc("/store/orders/status", s.handleStoreOrderStatus)
 	mux.HandleFunc("/store/orders/comment", s.handleStoreOrderComment)
 	mux.HandleFunc("/store/files/upload", s.handleStoreFileUpload)
+	mux.HandleFunc("/store/templates", s.handleStoreTemplates)
+	mux.HandleFunc("/store/templates/file", s.handleStoreTemplateFile)
+	mux.HandleFunc("/store/templates/save", s.handleStoreTemplateSave)
+	mux.HandleFunc("/store/templates/delete", s.handleStoreTemplateDelete)
 	mux.HandleFunc("/notifications", s.handleNotifications)
+	mux.HandleFunc("/version", s.handleVersion)
+	mux.HandleFunc("/public-identity", s.handlePublicIdentity)
+	mux.HandleFunc("/avatar", s.handleSetAvatar)
+	mux.HandleFunc("/messages/send", s.handleSendMessage)
+	mux.HandleFunc("/invites/create", s.handleCreateInvite)
+	mux.HandleFunc("/invites/accept", s.handleAcceptInvite)
+	mux.HandleFunc("/tip", s.handleTip)
 	mux.HandleFunc("/invites/redeem-key", s.handleRedeemPaidInvite)
 	mux.HandleFunc("/files/send", s.handleSendFile)
 	mux.HandleFunc("/stats/overview", s.handleStatsOverview)
@@ -330,6 +345,68 @@ func (s *StatusServer) handleKXReset(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := c.ResetRatchet(uid); err != nil {
 		http.Error(w, "reset ratchet: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleBlockContact blocks a user. Mirrors bruig's "Block User" action;
+// calls client.Block at client_kx.go:537. This is destructive: BR sends an
+// RMBlock to the peer AND removes the user from the local address book
+// (RemoveUser), so the contact and its message log are gone. Irreversible
+// short of a fresh KX.
+func (s *StatusServer) handleBlockContact(w http.ResponseWriter, r *http.Request) {
+	uid, ok := s.decodeUIDOnlyBody(w, r)
+	if !ok {
+		return
+	}
+	c := s.currentClient()
+	if c == nil {
+		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
+		return
+	}
+	if err := c.Block(uid); err != nil {
+		http.Error(w, "block user: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleIgnoreContact sets or clears the local ignore flag for a user.
+// Mirrors bruig's "Ignore/Un-ignore User" action; calls client.Ignore at
+// client_kx.go:505. Pure local clientdb mutation (nothing broadcast); the
+// flag surfaces as the `ignored` field of /contacts entries. Idempotent: a
+// no-op if the user is already in the requested state (client.Ignore itself
+// errors in that case).
+func (s *StatusServer) handleIgnoreContact(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	c := s.currentClient()
+	if c == nil {
+		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
+		return
+	}
+	var req struct {
+		UID    string `json:"uid"`
+		Ignore bool   `json:"ignore"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	var uid zkidentity.ShortID
+	if err := uid.FromString(req.UID); err != nil {
+		http.Error(w, "invalid uid: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if cur, err := c.IsIgnored(uid); err == nil && cur == req.Ignore {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if err := c.Ignore(uid, req.Ignore); err != nil {
+		http.Error(w, "ignore user: "+err.Error(), http.StatusBadGateway)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -1291,6 +1368,104 @@ func (s *StatusServer) handleStoreFileUpload(w http.ResponseWriter, r *http.Requ
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"path": saved})
+}
+
+// handleStoreTemplates lists the storefront's *.tmpl files (the Go templates
+// the store renders pages from).
+func (s *StatusServer) handleStoreTemplates(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	ctrl := s.currentStoreController()
+	if ctrl == nil {
+		http.Error(w, "store controller not yet ready", http.StatusServiceUnavailable)
+		return
+	}
+	tmpls, err := ctrl.listTemplates()
+	if err != nil {
+		http.Error(w, "list templates: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"templates": tmpls})
+}
+
+// handleStoreTemplateFile returns one template's raw content. Query: name.
+func (s *StatusServer) handleStoreTemplateFile(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	ctrl := s.currentStoreController()
+	if ctrl == nil {
+		http.Error(w, "store controller not yet ready", http.StatusServiceUnavailable)
+		return
+	}
+	name := r.URL.Query().Get("name")
+	content, err := ctrl.readTemplate(name)
+	if os.IsNotExist(err) {
+		http.Error(w, "template not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"name": name, "content": content})
+}
+
+// handleStoreTemplateSave writes (creates or overwrites) one template. Body:
+// {name, content}.
+func (s *StatusServer) handleStoreTemplateSave(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	ctrl := s.currentStoreController()
+	if ctrl == nil {
+		http.Error(w, "store controller not yet ready", http.StatusServiceUnavailable)
+		return
+	}
+	var req struct {
+		Name    string `json:"name"`
+		Content string `json:"content"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := ctrl.saveTemplate(req.Name, req.Content); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleStoreTemplateDelete removes one template. Body: {name}.
+func (s *StatusServer) handleStoreTemplateDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	ctrl := s.currentStoreController()
+	if ctrl == nil {
+		http.Error(w, "store controller not yet ready", http.StatusServiceUnavailable)
+		return
+	}
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := ctrl.deleteTemplate(req.Name); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleStoreOrderStatus updates one order's status. Body: {uid, id, status}.

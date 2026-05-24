@@ -86,6 +86,8 @@ func Run(ctx context.Context, cfg Config) error {
 		Notifs:      notifs,
 		AudioRouter: audioRouter,
 		PagesDir:    cfg.PagesDir,
+		AppName:     cfg.AppName,
+		AppVersion:  cfg.AppVersion,
 	}
 	g.Go(func() error { return statusSrv.Run(gctx) })
 
