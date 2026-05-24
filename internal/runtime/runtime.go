@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 
 	"github.com/companyzero/bisonrelay/client"
 	"github.com/companyzero/bisonrelay/client/clientdb"
@@ -45,6 +46,7 @@ type Config struct {
 	ReplayMsgLogsRoot string
 	UploadDir         string
 	SeederCachePath   string
+	PagesDir          string
 }
 
 // Run brings up the /status HTTP server and clientrpc.VersionService
@@ -65,6 +67,10 @@ func Run(ctx context.Context, cfg Config) error {
 	// identity check below, because the pre-setup endpoint claims port
 	// 7676 in the no-identity case and would conflict with an early
 	// clientrpc bind.
+	if err := ensurePagesDir(cfg.PagesDir); err != nil {
+		return fmt.Errorf("prepare pages dir: %w", err)
+	}
+
 	statusSrv := &StatusServer{
 		Log:         cfg.LogFn("STAT"),
 		Certs:       cfg.Certs,
@@ -74,6 +80,7 @@ func Run(ctx context.Context, cfg Config) error {
 		UploadDir:   cfg.UploadDir,
 		Notifs:      notifs,
 		AudioRouter: audioRouter,
+		PagesDir:    cfg.PagesDir,
 	}
 	g.Go(func() error { return statusSrv.Run(gctx) })
 
@@ -107,6 +114,7 @@ func Run(ctx context.Context, cfg Config) error {
 		AudioRouter:     audioRouter,
 		LogFn:           cfg.LogFn,
 		IdentityChan:    identityChan,
+		PagesDir:        cfg.PagesDir,
 	})
 	if err != nil {
 		return err
@@ -226,6 +234,27 @@ func runClientRPC(ctx context.Context, cfg Config, c *client.Client, dcrlndPay *
 		cfg.Log.Infof("clientrpc listening on %s (mTLS, all services)", addr)
 	}
 	return srv.Run(ctx)
+}
+
+// ensurePagesDir creates the page-hosting root if missing and, when the
+// directory is empty, seeds a starter index.md so a freshly provisioned node
+// serves something at its root path instead of a 404.
+func ensurePagesDir(dir string) error {
+	if dir == "" {
+		return nil
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	if len(entries) > 0 {
+		return nil
+	}
+	const starter = "# Welcome\n\nThis is your Bison Relay page. Edit it from the dashboard Pages tab.\n"
+	return os.WriteFile(filepath.Join(dir, "index.md"), []byte(starter), 0o600)
 }
 
 func buildListeners(certs certgen.Triplet, addresses []string) ([]net.Listener, error) {

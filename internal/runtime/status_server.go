@@ -40,6 +40,7 @@ type StatusServer struct {
 	Tracker     *Tracker
 	DB          *clientdb.DB
 	UploadDir   string
+	PagesDir    string
 	Notifs      *notifBus
 	AudioRouter *RTDTAudioRouter
 
@@ -108,6 +109,11 @@ func (s *StatusServer) Run(ctx context.Context) error {
 	mux.HandleFunc("/rtdt/sessions/", s.handleRTDT)
 	mux.HandleFunc("/gc", s.handleGC)
 	mux.HandleFunc("/gc/", s.handleGC)
+	mux.HandleFunc("/pages/fetch", s.handlePagesFetch)
+	mux.HandleFunc("/pages/local", s.handlePagesLocalList)
+	mux.HandleFunc("/pages/local/file", s.handlePagesLocalFile)
+	mux.HandleFunc("/pages/local/save", s.handlePagesLocalSave)
+	mux.HandleFunc("/pages/local/delete", s.handlePagesLocalDelete)
 
 	srv := &http.Server{
 		Addr:              s.Listen,

@@ -15,6 +15,7 @@ import (
 	"github.com/companyzero/bisonrelay/client"
 	"github.com/companyzero/bisonrelay/client/clientdb"
 	"github.com/companyzero/bisonrelay/client/clientintf"
+	"github.com/companyzero/bisonrelay/client/resources"
 	"github.com/companyzero/bisonrelay/rpc"
 	rtdtclient "github.com/companyzero/bisonrelay/rtdt/client"
 	"github.com/companyzero/bisonrelay/zkidentity"
@@ -35,6 +36,10 @@ type BRClientCfg struct {
 	AudioRouter     *RTDTAudioRouter
 	LogFn           func(subsys string) slog.Logger
 	IdentityChan    <-chan *zkidentity.FullIdentity
+	// PagesDir is the on-disk root from which this client hosts its own
+	// markdown pages (the brclient "pages:" equivalent). Served to remote
+	// peers and to ourselves via client.Config.ResourcesProvider.
+	PagesDir string
 }
 
 // startBRClient builds the BR client config, instantiates the client, and
@@ -54,6 +59,33 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 	ntfns := client.NewNotificationManager()
 	ntfns.Register(client.OnServerSessionChangedNtfn(func(connected bool, _ clientintf.ServerPolicy) {
 		cfg.Tracker.SetConnected(connected)
+	}))
+
+	// OnResourceFetched fires when a page (resource) reply lands, for both
+	// remote fetches (FetchResource) and our own local pages
+	// (FetchLocalResource, which fires it synchronously with ru==nil). The
+	// status server's /pages/fetch handler subscribes to this event to turn
+	// the async fetch into a single blocking request. Response.Data carries
+	// the (embed-processed) markdown; Request.Tag correlates remote replies.
+	ntfns.Register(client.OnResourceFetchedNtfn(func(ru *client.RemoteUser, fr clientdb.FetchedResource, _ clientdb.PageSessionOverview) {
+		if cfg.Notifs == nil {
+			return
+		}
+		cfg.Notifs.Publish(NotifEvent{
+			Type: "resource-fetched",
+			Payload: map[string]any{
+				"uid":             fr.UID.String(),
+				"tag":             uint64(fr.Request.Tag),
+				"status":          uint16(fr.Response.Status),
+				"meta":            fr.Response.Meta,
+				"data":            string(fr.Response.Data),
+				"path":            fr.Request.Path,
+				"async_target_id": fr.AsyncTargetID,
+				"session_id":      uint64(fr.SessionID),
+				"page_id":         uint64(fr.PageID),
+				"parent_page":     uint64(fr.ParentPage),
+			},
+		})
 	}))
 
 	// OnKXSuggested fires when a contact sends us a SuggestKX. BR v0.2.4
@@ -797,6 +829,18 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 		}
 	}
 
+	// Host our own markdown pages from PagesDir via a filesystem resource
+	// bound at the root prefix. This is the brclient "pages:" equivalent and
+	// is also what FetchLocalResource fulfills against when we view our own
+	// pages. Without it, ResourcesProvider stays nil and both hosting and
+	// local fetches are disabled.
+	var resProvider resources.Provider
+	if cfg.PagesDir != "" {
+		resRouter := resources.NewRouter()
+		resRouter.BindPrefixPath([]string{}, resources.NewFilesystemResource(cfg.PagesDir, cfg.LogFn("PAGE")))
+		resProvider = resRouter
+	}
+
 	brCfg := client.Config{
 		DB:                     cfg.DB,
 		PayClient:              cfg.DcrlndPay,
@@ -804,6 +848,7 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 		Notifications:          ntfns,
 		Logger:                 cfg.LogFn,
 		RTDTAudioStreamHandler: audioHandler,
+		ResourcesProvider:      resProvider,
 		// Auto-subscribe to posts on first-time KX with a new contact.
 		// BR's gating in client_kx.go:277 ensures this only fires on a
 		// fresh KX (updateAB && !oldUser) and defers to any prior
