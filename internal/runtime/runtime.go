@@ -130,6 +130,14 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	})
 
+	// Drive BR's exchange-rate fetcher (DCR/USD + BTC/USD from api.decred.org
+	// / dcrdata). It self-throttles to a 10 minute refresh and exits with the
+	// context; the /rates endpoint reads the cached value via c.Rates().Get.
+	g.Go(func() error {
+		c.Rates().Run(gctx)
+		return nil
+	})
+
 	select {
 	case <-cfg.DB.RunStarted():
 	case <-gctx.Done():

@@ -97,6 +97,9 @@ func (s *StatusServer) Run(ctx context.Context) error {
 	mux.HandleFunc("/shared-files/remove", s.handleSharedFileRemove)
 	mux.HandleFunc("/downloads", s.handleDownloads)
 	mux.HandleFunc("/downloads/cancel", s.handleDownloadCancel)
+	mux.HandleFunc("/content/get", s.handleContentGet)
+	mux.HandleFunc("/content/file", s.handleContentFile)
+	mux.HandleFunc("/rates", s.handleRates)
 	mux.HandleFunc("/notifications", s.handleNotifications)
 	mux.HandleFunc("/invites/redeem-key", s.handleRedeemPaidInvite)
 	mux.HandleFunc("/files/send", s.handleSendFile)
@@ -714,8 +717,9 @@ func (s *StatusServer) handleSharedFiles(w http.ResponseWriter, r *http.Request)
 }
 
 // handleSharedFileAdd receives a multipart upload + sharing parameters
-// and registers the file as a local SharedFile. cost_matoms is the
-// per-fetch price in milliatoms (0 = free), target_uid optional (empty
+// and registers the file as a local SharedFile. cost_atoms is the
+// per-fetch price in atoms (1 DCR = 1e8; 0 = free) - shared-file costs use
+// atoms, not the milli-atoms of payment records - target_uid optional (empty
 // string = global share). The upload file is read by c.ShareFile into
 // BR's internal content store and removed from UploadDir after.
 func (s *StatusServer) handleSharedFileAdd(w http.ResponseWriter, r *http.Request) {
@@ -738,12 +742,12 @@ func (s *StatusServer) handleSharedFileAdd(w http.ResponseWriter, r *http.Reques
 	}
 	defer r.MultipartForm.RemoveAll()
 
-	costStr := strings.TrimSpace(r.FormValue("cost_matoms"))
+	costStr := strings.TrimSpace(r.FormValue("cost_atoms"))
 	var cost uint64
 	if costStr != "" {
 		v, err := strconv.ParseUint(costStr, 10, 64)
 		if err != nil {
-			http.Error(w, "invalid cost_matoms: "+err.Error(), http.StatusBadRequest)
+			http.Error(w, "invalid cost_atoms: "+err.Error(), http.StatusBadRequest)
 			return
 		}
 		cost = v
@@ -938,6 +942,240 @@ func (s *StatusServer) handleDownloadCancel(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleContentGet initiates a download of a shared file (FID) from a remote
+// user, as advertised by an --embed[download=<fid>,cost=,...]-- tag in a post
+// or page. BR fetches the file metadata, auto-pays per-chunk for any cost the
+// uploader set, and writes the bytes to disk. Progress surfaces via /downloads
+// and the file-download-progress / file-download-completed events. Body:
+// {uid, fid}.
+func (s *StatusServer) handleContentGet(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		UID string `json:"uid"`
+		FID string `json:"fid"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	var uid zkidentity.ShortID
+	if err := uid.FromString(req.UID); err != nil {
+		http.Error(w, "invalid uid: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	var fid zkidentity.ShortID
+	if err := fid.FromString(req.FID); err != nil {
+		http.Error(w, "invalid fid: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	c := s.currentClient()
+	if c == nil {
+		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
+		return
+	}
+	if err := c.GetUserContent(uid, fid); err != nil {
+		http.Error(w, "get user content: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleContentFile streams the bytes of a fully-downloaded shared file so the
+// dashboard can display it inline (image) or offer it as a download. Query:
+// fid (required), uid (optional, disambiguates the same file from two peers).
+// The path always comes from the matching download record's DiskPath, never
+// from the request, and only completed downloads (DiskPath set) are served.
+func (s *StatusServer) handleContentFile(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	fidStr := strings.TrimSpace(r.URL.Query().Get("fid"))
+	uidStr := strings.TrimSpace(r.URL.Query().Get("uid"))
+	if fidStr == "" {
+		http.Error(w, "fid query param is required", http.StatusBadRequest)
+		return
+	}
+	c := s.currentClient()
+	if c == nil {
+		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
+		return
+	}
+	downloads, err := c.ListDownloads()
+	if err != nil {
+		http.Error(w, "list downloads: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	var diskPath, filename string
+	for _, d := range downloads {
+		if d.FID.String() != fidStr {
+			continue
+		}
+		if uidStr != "" && d.UID.String() != uidStr {
+			continue
+		}
+		diskPath = d.DiskPath
+		if d.Metadata != nil {
+			filename = d.Metadata.Filename
+		}
+		break
+	}
+	if diskPath == "" {
+		http.Error(w, "file not downloaded yet", http.StatusNotFound)
+		return
+	}
+	f, err := os.Open(diskPath)
+	if err != nil {
+		http.Error(w, "open file: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer f.Close()
+	if filename != "" {
+		w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=%q", filename))
+	}
+	var modtime time.Time
+	if info, err := f.Stat(); err == nil {
+		modtime = info.ModTime()
+	}
+	// ServeContent sniffs the content type (by extension then bytes) and
+	// supports range requests for large files.
+	http.ServeContent(w, r, filename, modtime, f)
+}
+
+// handleRates returns the current exchange rates (USD per DCR and per BTC).
+// The primary source is BR's built-in rate engine (api.decred.org / dcrdata,
+// refreshed every ~10 min). When BR has no DCR rate - typically because that
+// Decred infrastructure is temporarily down - we fall back to Kraken's
+// DCR/USD ticker, throttled by krakenDCRUSD so a sustained BR outage cannot
+// hammer Kraken.
+func (s *StatusServer) handleRates(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	c := s.currentClient()
+	if c == nil {
+		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
+		return
+	}
+	dcrUSD, btcUSD := c.Rates().Get()
+	source := "bisonrelay"
+	if dcrUSD <= 0 {
+		source = ""
+		if kd := krakenDCRUSD(r.Context()); kd > 0 {
+			dcrUSD, btcUSD, source = kd, 0, "kraken"
+		}
+	}
+
+	// Stamp updated_at by change-detection: advance it only when the served
+	// price actually changes. A value frozen because BR's upstreams (or Kraken)
+	// are down then stays visibly stale rather than looking freshly refreshed.
+	// When no source has a rate we keep serving the last-known value + its old
+	// timestamp so the consumer can still tell how stale it is.
+	rateState.mu.Lock()
+	if dcrUSD > 0 && (dcrUSD != rateState.dcrUSD || btcUSD != rateState.btcUSD || source != rateState.source) {
+		rateState.dcrUSD, rateState.btcUSD, rateState.source = dcrUSD, btcUSD, source
+		rateState.updatedAt = time.Now()
+	}
+	out := struct {
+		DCRUSD    float64 `json:"dcr_usd"`
+		BTCUSD    float64 `json:"btc_usd"`
+		Source    string  `json:"source"`
+		UpdatedAt string  `json:"updated_at"`
+	}{DCRUSD: rateState.dcrUSD, BTCUSD: rateState.btcUSD, Source: rateState.source}
+	if !rateState.updatedAt.IsZero() {
+		out.UpdatedAt = rateState.updatedAt.UTC().Format(time.RFC3339)
+	}
+	rateState.mu.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(out)
+}
+
+// rateState holds the last rate brclientd served and the time that value last
+// changed (see handleRates). Separate from krakenRate, which only throttles
+// the Kraken HTTP call.
+var rateState struct {
+	mu        sync.Mutex
+	dcrUSD    float64
+	btcUSD    float64
+	source    string
+	updatedAt time.Time
+}
+
+// krakenMinInterval throttles the last-resort Kraken fallback: at most one
+// request per window, no matter how often /rates is hit or how long BR's rate
+// source stays down.
+const krakenMinInterval = 10 * time.Minute
+
+// krakenRate caches the last Kraken DCR/USD price and the time of the last
+// attempt (success or failure) so the throttle holds even when Kraken errors.
+var krakenRate struct {
+	mu      sync.Mutex
+	dcrUSD  float64
+	lastTry time.Time
+}
+
+// krakenDCRUSD returns a DCR/USD price from Kraken, fetching at most once per
+// krakenMinInterval and otherwise returning the cached value (0 if never
+// fetched). Only called when BR has no rate of its own.
+func krakenDCRUSD(ctx context.Context) float64 {
+	krakenRate.mu.Lock()
+	defer krakenRate.mu.Unlock()
+	if !krakenRate.lastTry.IsZero() && time.Since(krakenRate.lastTry) < krakenMinInterval {
+		return krakenRate.dcrUSD
+	}
+	krakenRate.lastTry = time.Now()
+	price, err := fetchKrakenDCRUSD(ctx)
+	if err != nil {
+		// Keep any earlier value; the throttle prevents an immediate retry.
+		return krakenRate.dcrUSD
+	}
+	krakenRate.dcrUSD = price
+	return price
+}
+
+// fetchKrakenDCRUSD pulls the last-trade DCR/USD price from Kraken's public
+// ticker (a clearnet call; no .onion endpoint exists).
+func fetchKrakenDCRUSD(ctx context.Context) (float64, error) {
+	reqCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet,
+		"https://api.kraken.com/0/public/Ticker?pair=DCRUSD", nil)
+	if err != nil {
+		return 0, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("kraken HTTP %d", resp.StatusCode)
+	}
+	var kr struct {
+		Error  []string `json:"error"`
+		Result map[string]struct {
+			C []string `json:"c"` // [last trade price, lot volume]
+		} `json:"result"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&kr); err != nil {
+		return 0, err
+	}
+	if len(kr.Error) > 0 {
+		return 0, fmt.Errorf("kraken: %v", kr.Error)
+	}
+	for _, v := range kr.Result {
+		if len(v.C) > 0 {
+			return strconv.ParseFloat(v.C[0], 64)
+		}
+	}
+	return 0, fmt.Errorf("kraken: empty result")
 }
 
 // handlePostsNew authors a new post and shares it with our subscribers.
