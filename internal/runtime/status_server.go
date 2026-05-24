@@ -118,6 +118,11 @@ func (s *StatusServer) Run(ctx context.Context) error {
 	mux.HandleFunc("/content/file", s.handleContentFile)
 	mux.HandleFunc("/rates", s.handleRates)
 	mux.HandleFunc("/store/mode", s.handleStoreMode)
+	mux.HandleFunc("/store/products", s.handleStoreProducts)
+	mux.HandleFunc("/store/products/delete", s.handleStoreProductDelete)
+	mux.HandleFunc("/store/orders", s.handleStoreOrders)
+	mux.HandleFunc("/store/orders/status", s.handleStoreOrderStatus)
+	mux.HandleFunc("/store/files/upload", s.handleStoreFileUpload)
 	mux.HandleFunc("/notifications", s.handleNotifications)
 	mux.HandleFunc("/invites/redeem-key", s.handleRedeemPaidInvite)
 	mux.HandleFunc("/files/send", s.handleSendFile)
@@ -1167,6 +1172,151 @@ func writeStoreMode(w http.ResponseWriter, m storeMode) {
 		"account":     m.Account,
 		"ship_charge": m.ShipCharge,
 	})
+}
+
+// handleStoreProducts lists (GET) or upserts (POST) the storefront's products.
+// Products are written to the store's products dir; the store live-reloads
+// them. Works regardless of the active hosting mode so a catalog can be
+// prepared before the store is switched on.
+func (s *StatusServer) handleStoreProducts(w http.ResponseWriter, r *http.Request) {
+	ctrl := s.currentStoreController()
+	if ctrl == nil {
+		http.Error(w, "store controller not yet ready", http.StatusServiceUnavailable)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		products, err := ctrl.listProducts()
+		if err != nil {
+			http.Error(w, "list products: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"products": products})
+	case http.MethodPost:
+		var p storeProduct
+		if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+			http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := ctrl.saveProduct(p); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleStoreProductDelete removes a product by SKU. Body: {sku}.
+func (s *StatusServer) handleStoreProductDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	ctrl := s.currentStoreController()
+	if ctrl == nil {
+		http.Error(w, "store controller not yet ready", http.StatusServiceUnavailable)
+		return
+	}
+	var req struct {
+		SKU string `json:"sku"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := ctrl.deleteProduct(req.SKU); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleStoreOrders lists all storefront orders (across customers), newest
+// first.
+func (s *StatusServer) handleStoreOrders(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	ctrl := s.currentStoreController()
+	if ctrl == nil {
+		http.Error(w, "store controller not yet ready", http.StatusServiceUnavailable)
+		return
+	}
+	orders, err := ctrl.listOrders()
+	if err != nil {
+		http.Error(w, "list orders: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"orders": orders})
+}
+
+// handleStoreFileUpload stores an uploaded file under the store dir at the
+// given relative path, for products to reference via sendfilename (digital
+// downloads). Multipart: path (relative, e.g. ebooks/x.pdf) + file.
+func (s *StatusServer) handleStoreFileUpload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	ctrl := s.currentStoreController()
+	if ctrl == nil {
+		http.Error(w, "store controller not yet ready", http.StatusServiceUnavailable)
+		return
+	}
+	if err := r.ParseMultipartForm(64 << 20); err != nil {
+		http.Error(w, "parse multipart: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	defer r.MultipartForm.RemoveAll()
+	relPath := strings.TrimSpace(r.FormValue("path"))
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		http.Error(w, "file part missing: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+	if relPath == "" {
+		relPath = header.Filename
+	}
+	saved, err := ctrl.saveStoreFile(relPath, file)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"path": saved})
+}
+
+// handleStoreOrderStatus updates one order's status. Body: {uid, id, status}.
+func (s *StatusServer) handleStoreOrderStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	ctrl := s.currentStoreController()
+	if ctrl == nil {
+		http.Error(w, "store controller not yet ready", http.StatusServiceUnavailable)
+		return
+	}
+	var req struct {
+		UID    string `json:"uid"`
+		ID     uint64 `json:"id"`
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := ctrl.setOrderStatus(req.UID, req.ID, req.Status); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // krakenMinInterval throttles the last-resort Kraken fallback: at most one
