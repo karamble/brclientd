@@ -1210,10 +1210,10 @@ var rateState struct {
 }
 
 // handleStoreMode reports (GET) or switches (POST) this node's resource-hosting
-// mode: static pages (enabled=false) or a simplestore (enabled=true). POST
-// body: {enabled, pay_type, account, ship_charge}. Switching the store off
-// stops its invoice watcher, so orders awaiting payment will not auto-settle
-// until it is re-enabled.
+// mode: "off" (serve nothing), "pages" (static markdown) or "store" (a
+// simplestore). POST body: {mode, pay_type, account, ship_charge}. Switching
+// away from the store stops its invoice watcher, so orders awaiting payment will
+// not auto-settle until it is re-enabled.
 func (s *StatusServer) handleStoreMode(w http.ResponseWriter, r *http.Request) {
 	ctrl := s.currentStoreController()
 	if ctrl == nil {
@@ -1229,7 +1229,12 @@ func (s *StatusServer) handleStoreMode(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		if req.Enabled && req.PayType != "ln" && req.PayType != "onchain" {
+		switch req.Mode {
+		case hostModeOff, hostModePages, hostModeStore:
+		default:
+			req.Mode = hostModeOff
+		}
+		if req.Mode == hostModeStore && req.PayType != "ln" && req.PayType != "onchain" {
 			req.PayType = "ln"
 		}
 		if err := ctrl.SetMode(req); err != nil {
@@ -1245,7 +1250,7 @@ func (s *StatusServer) handleStoreMode(w http.ResponseWriter, r *http.Request) {
 func writeStoreMode(w http.ResponseWriter, m storeMode) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"enabled":     m.Enabled,
+		"mode":        m.Mode,
 		"pay_type":    m.PayType,
 		"account":     m.Account,
 		"ship_charge": m.ShipCharge,

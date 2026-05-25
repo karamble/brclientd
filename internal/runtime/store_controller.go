@@ -37,7 +37,11 @@ func (s *switchableProvider) Fulfill(ctx context.Context, uid clientintf.UserID,
 	p := s.active
 	s.mu.RUnlock()
 	if p == nil {
-		return &rpc.RMFetchResourceReply{Status: rpc.ResourceStatusNotFound}, nil
+		// No delegate means hosting is deactivated. Return ErrProviderNotFound
+		// (not a NotFound reply) so client.handleFetchResource sends nothing
+		// back to the peer, matching upstream's "no resources.upstream" node. A
+		// NotFound reply would still be delivered and render as an empty page.
+		return nil, resources.ErrProviderNotFound
 	}
 	return p.Fulfill(ctx, uid, req)
 }
@@ -48,10 +52,19 @@ func (s *switchableProvider) set(p resources.Provider) {
 	s.mu.Unlock()
 }
 
-// storeMode is the persisted hosting choice: static pages (Enabled=false) or a
-// simplestore (Enabled=true) with its payment settings.
+// Resource-hosting modes. A node serves one at a time (BR binds a single
+// resource provider at the root). hostModeOff binds no delegate so the node
+// serves nothing over the relay, mirroring upstream BR's empty resources.upstream.
+const (
+	hostModeOff   = "off"
+	hostModePages = "pages"
+	hostModeStore = "store"
+)
+
+// storeMode is the persisted hosting choice. PayType/Account/ShipCharge are
+// retained across off/pages so switching back to the store remembers them.
 type storeMode struct {
-	Enabled    bool    `json:"enabled"`
+	Mode       string  `json:"mode"`
 	PayType    string  `json:"pay_type"`
 	Account    string  `json:"account"`
 	ShipCharge float64 `json:"ship_charge"`
@@ -107,10 +120,20 @@ func newStoreController(rootCtx context.Context, prov *switchableProvider, c *cl
 func (s *storeController) applyInitial() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.mode.Enabled {
+	return s.applyModeLocked()
+}
+
+// applyModeLocked binds the resource provider for s.mode. An unknown/empty mode
+// is treated as off so a node never serves something it was not configured to.
+func (s *storeController) applyModeLocked() error {
+	switch s.mode.Mode {
+	case hostModeStore:
 		return s.enableStoreLocked()
+	case hostModePages:
+		return s.enablePagesLocked()
+	default:
+		return s.enableOffLocked()
 	}
-	return s.enablePagesLocked()
 }
 
 // Mode returns the current hosting mode.
@@ -128,16 +151,18 @@ func (s *storeController) SetMode(m storeMode) error {
 	defer s.mu.Unlock()
 	s.stopStoreLocked()
 	s.mode = m
-	var err error
-	if m.Enabled {
-		err = s.enableStoreLocked()
-	} else {
-		err = s.enablePagesLocked()
-	}
-	if err != nil {
+	if err := s.applyModeLocked(); err != nil {
 		return err
 	}
 	return s.saveMode()
+}
+
+// enableOffLocked deactivates hosting: the switchableProvider's delegate is
+// cleared, so any remote FetchResource hits the nil-delegate path and gets
+// ResourceStatusNotFound regardless of files on disk.
+func (s *storeController) enableOffLocked() error {
+	s.prov.set(nil)
+	return nil
 }
 
 func (s *storeController) enablePagesLocked() error {
@@ -223,6 +248,9 @@ func (s *storeController) loadMode() (storeMode, bool) {
 	var m storeMode
 	if err := json.Unmarshal(data, &m); err != nil {
 		return storeMode{}, false
+	}
+	if m.Mode == "" {
+		m.Mode = hostModeOff
 	}
 	return m, true
 }

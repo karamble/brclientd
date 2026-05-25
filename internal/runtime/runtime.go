@@ -135,9 +135,13 @@ func Run(ctx context.Context, cfg Config) error {
 	// Bind the resource provider for the persisted/default hosting mode (pages
 	// or simplestore) now that the client exists, and expose the controller so
 	// the dashboard can flip modes at runtime.
+	defaultMode := hostModeOff
+	if cfg.StoreEnabled {
+		defaultMode = hostModeStore
+	}
 	storeCtrl := newStoreController(gctx, storeProv, c, dcrlndPay, notifs, cfg.LogFn,
 		cfg.PagesDir, cfg.StoreDir, storeMode{
-			Enabled:    cfg.StoreEnabled,
+			Mode:       defaultMode,
 			PayType:    cfg.StorePayType,
 			Account:    cfg.StoreAccount,
 			ShipCharge: cfg.StoreShipCharge,
