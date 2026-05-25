@@ -665,6 +665,23 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 			})
 		}))
 
+		// ---- PM (private message) notifications ----
+		// OnPMNtfn fires once per newly-received PM (after it is logged) and is
+		// never invoked for history/backlog, so the dashboard can badge from this
+		// in-process event without the replay that ChatService.PMStream incurs.
+		ntfns.Register(client.OnPMNtfn(func(ru *client.RemoteUser, pm rpc.RMPrivateMessage, ts time.Time) {
+			notifs.Publish(NotifEvent{
+				Type:      "pm",
+				Timestamp: ts,
+				Payload: map[string]any{
+					"from":     ru.ID().String(),
+					"fromNick": ru.Nick(),
+					"message":  pm.Message,
+					"mode":     int(pm.Mode),
+				},
+			})
+		}))
+
 		// ---- GC (group-chat) notifications ----
 		// 12 OnGC* hooks. We republish each as gc-<kebab>. The dashboard's
 		// existing ChatService.GCMStream covers message arrival as 'gcm',
