@@ -45,6 +45,8 @@ type Config struct {
 	DcrlndRPCHost     string
 	ReplayMsgLogsRoot string
 	UploadDir         string
+	MsgsRoot          string
+	EmbedsRoot        string
 	SeederCachePath   string
 	PagesDir          string
 
@@ -83,6 +85,8 @@ func Run(ctx context.Context, cfg Config) error {
 		Tracker:     tracker,
 		DB:          cfg.DB,
 		UploadDir:   cfg.UploadDir,
+		MsgsRoot:    cfg.MsgsRoot,
+		EmbedsRoot:  cfg.EmbedsRoot,
 		Notifs:      notifs,
 		AudioRouter: audioRouter,
 		PagesDir:    cfg.PagesDir,

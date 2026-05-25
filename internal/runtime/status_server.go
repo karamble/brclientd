@@ -40,6 +40,8 @@ type StatusServer struct {
 	Tracker     *Tracker
 	DB          *clientdb.DB
 	UploadDir   string
+	MsgsRoot    string
+	EmbedsRoot  string
 	PagesDir    string
 	Notifs      *notifBus
 	AudioRouter *RTDTAudioRouter
@@ -92,6 +94,7 @@ func (s *StatusServer) Run(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/status", s.handleStatus)
 	mux.HandleFunc("/history/pm", s.handleHistoryPM)
+	mux.HandleFunc("/history/pm/clear", s.handleClearPMHistory)
 	mux.HandleFunc("/contacts", s.handleContacts)
 	mux.HandleFunc("/contacts/rename", s.handleRenameContact)
 	mux.HandleFunc("/contacts/kx-reset", s.handleKXReset)
@@ -353,8 +356,10 @@ func (s *StatusServer) handleKXReset(w http.ResponseWriter, r *http.Request) {
 // handleBlockContact blocks a user. Mirrors bruig's "Block User" action;
 // calls client.Block at client_kx.go:537. This is destructive: BR sends an
 // RMBlock to the peer AND removes the user from the local address book
-// (RemoveUser), so the contact and its message log are gone. Irreversible
-// short of a fresh KX.
+// (RemoveUser deletes inbound/<uid>: ratchet + unacked RMs). Irreversible
+// short of a fresh KX. NOTE: RemoveUser does NOT delete the PM message log
+// under MsgsRoot, so the on-disk history is orphaned after a block; use
+// handleClearPMHistory to remove that.
 func (s *StatusServer) handleBlockContact(w http.ResponseWriter, r *http.Request) {
 	uid, ok := s.decodeUIDOnlyBody(w, r)
 	if !ok {
@@ -368,6 +373,43 @@ func (s *StatusServer) handleBlockContact(w http.ResponseWriter, r *http.Request
 	if err := c.Block(uid); err != nil {
 		http.Error(w, "block user: "+err.Error(), http.StatusBadGateway)
 		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleClearPMHistory permanently deletes the local PM history (and inline
+// media) for one contact. dcrpulse-original: BR exposes no clear-history API,
+// so this operates directly on the on-disk message store. It removes every
+// MsgsRoot/*.<uid>.log (the filename embeds the contact's nick, which can
+// change over time, so we glob by uid) plus the contact's embeds dir. The
+// address book entry + ratchet are left intact so messaging can continue;
+// only the local copy is wiped (the peer keeps theirs). Irreversible. Pure
+// filesystem, so it works without a live BR client.
+func (s *StatusServer) handleClearPMHistory(w http.ResponseWriter, r *http.Request) {
+	uid, ok := s.decodeUIDOnlyBody(w, r)
+	if !ok {
+		return
+	}
+	if s.MsgsRoot == "" {
+		http.Error(w, "history paths not configured", http.StatusServiceUnavailable)
+		return
+	}
+	logs, err := filepath.Glob(filepath.Join(s.MsgsRoot, "*."+uid.String()+".log"))
+	if err != nil {
+		http.Error(w, "glob pm logs: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	for _, f := range logs {
+		if err := os.Remove(f); err != nil && !os.IsNotExist(err) {
+			http.Error(w, "remove pm log: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	if s.EmbedsRoot != "" {
+		if err := os.RemoveAll(filepath.Join(s.EmbedsRoot, uid.String())); err != nil {
+			http.Error(w, "remove embeds: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

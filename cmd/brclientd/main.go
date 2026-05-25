@@ -88,6 +88,8 @@ func run(args []string) error {
 		DcrlndRPCHost:     cfg.Dcrlnd.RPCHost,
 		ReplayMsgLogsRoot: filepath.Join(cfg.DataDir, "replaymsglog"),
 		UploadDir:         filepath.Join(cfg.DataDir, "uploads"),
+		MsgsRoot:          idPaths.MsgsRoot,
+		EmbedsRoot:        idPaths.EmbedsRoot,
 		SeederCachePath:   filepath.Join(cfg.DataDir, "seeder-cache.json"),
 		PagesDir:          filepath.Join(cfg.DataDir, "pages"),
 		StoreEnabled:      cfg.SimpleStore.Enabled,
