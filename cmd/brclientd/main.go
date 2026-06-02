@@ -23,7 +23,9 @@ import (
 	"github.com/karamble/brclientd/internal/runtime"
 )
 
-const Version = "0.0.1"
+// Version is set at build time from the git tag via
+// -ldflags "-X main.Version=...". It defaults to "dev" for plain `go build`.
+var Version = "dev"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
