@@ -15,7 +15,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE: ghcr.io/${{ github.repository_owner }}/dcrpulse-brclientd
+  IMAGE: ghcr.io/${{ github.repository_owner }}/brclientd
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
