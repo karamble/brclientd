@@ -34,6 +34,7 @@ type BRClientCfg struct {
 	Tracker         *Tracker
 	Notifs          *notifBus
 	AudioRouter     *RTDTAudioRouter
+	Reinvites       *gcReinviteTracker
 	LogFn           func(subsys string) slog.Logger
 	IdentityChan    <-chan *zkidentity.FullIdentity
 	// ResProvider is the resource provider bound at the client's root. The
@@ -127,6 +128,64 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 					"inviteeNick": inviteeNick,
 					"target":      targetIDHex,
 					"targetNick":  targetNick,
+				},
+			})
+		}
+	}))
+
+	// OnRMReceived fires for every inbound RM before the library's own
+	// handler runs; registered sync so the GC lookup below observes db
+	// state from that same vantage point (client_rm_handlers.go:346).
+	// BR's handleGCInvite drops any invite whose GC already exists
+	// locally without storing it or firing a notification, which
+	// dead-ends rejoining a GC after a restore left a stale local copy
+	// (the admin re-invites because the live roster dropped us). Record
+	// those blocked attempts so /gc/invites can report them and the
+	// dashboard can offer recovery (leave the stale copy, request a
+	// fresh invite). An invite for a GC we do not have locally is stored
+	// by the library, so any blocked record for it is moot: clear it.
+	// Sync handlers must not block; this is one GC file read gated
+	// behind the type assertion.
+	ntfns.RegisterSync(client.OnRMReceived(func(ru *client.RemoteUser, _ *rpc.RMHeader, p interface{}, _ time.Time) {
+		inv, ok := p.(rpc.RMGroupInvite)
+		if !ok || cfg.Reinvites == nil {
+			return
+		}
+		gcid := inv.ID.String()
+		var localName string
+		exists := false
+		err := cfg.DB.View(context.Background(), func(tx clientdb.ReadTx) error {
+			gc, err := cfg.DB.GetGC(tx, inv.ID)
+			if err == nil {
+				exists = true
+				localName = gc.Name()
+			}
+			return nil
+		})
+		if err != nil {
+			nlog.Warnf("Check local GC for incoming invite %s: %v", gcid, err)
+			return
+		}
+		if !exists {
+			cfg.Reinvites.Clear(gcid)
+			return
+		}
+		if localName == "" {
+			localName = inv.Name
+		}
+		e := cfg.Reinvites.Record(gcid, localName, ru.ID().String(), ru.Nick())
+		nlog.Warnf("Re-invite to GC %q (%s) from %s blocked by existing local copy",
+			localName, gcid, ru.Nick())
+		if cfg.Notifs != nil {
+			cfg.Notifs.Publish(NotifEvent{
+				Type: "gc-reinvite-blocked",
+				Payload: map[string]any{
+					"gcid":        e.GCID,
+					"name":        e.Name,
+					"from":        e.From,
+					"fromNick":    e.FromNick,
+					"count":       e.Count,
+					"lastAttempt": e.LastAttempt,
 				},
 			})
 		}

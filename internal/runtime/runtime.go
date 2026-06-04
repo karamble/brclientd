@@ -76,6 +76,7 @@ func Run(ctx context.Context, cfg Config) error {
 	tracker := NewTracker(cfg.Log)
 	notifs := newNotifBus()
 	audioRouter := NewRTDTAudioRouter(cfg.LogFn("RTAU"))
+	reinvites := newGCReinviteTracker()
 
 	g, gctx := errgroup.WithContext(ctx)
 
@@ -96,6 +97,7 @@ func Run(ctx context.Context, cfg Config) error {
 		EmbedsRoot:  cfg.EmbedsRoot,
 		Notifs:      notifs,
 		AudioRouter: audioRouter,
+		Reinvites:   reinvites,
 		PagesDir:    cfg.PagesDir,
 		DataDir:     cfg.DataDir,
 		AppName:     cfg.AppName,
@@ -135,6 +137,7 @@ func Run(ctx context.Context, cfg Config) error {
 		Tracker:         tracker,
 		Notifs:          notifs,
 		AudioRouter:     audioRouter,
+		Reinvites:       reinvites,
 		LogFn:           cfg.LogFn,
 		IdentityChan:    identityChan,
 		ResProvider:     storeProv,

@@ -46,6 +46,7 @@ type StatusServer struct {
 	DataDir     string
 	Notifs      *notifBus
 	AudioRouter *RTDTAudioRouter
+	Reinvites   *gcReinviteTracker
 	AppName     string
 	AppVersion  string
 

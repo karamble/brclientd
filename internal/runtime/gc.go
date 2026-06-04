@@ -6,6 +6,7 @@ package runtime
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -257,10 +258,29 @@ func (s *StatusServer) handleGCInvitesList(w http.ResponseWriter, r *http.Reques
 			Accepted:    inv.Accepted,
 		})
 	}
+	// Blocked re-invites recorded by the OnRMReceived hook. Prune lazily:
+	// once the local GC is gone (user left or killed it outside this
+	// process) the entry is moot and the next invite will store normally.
+	var blocked []gcBlockedReinvite
+	if s.Reinvites != nil {
+		for _, e := range s.Reinvites.List() {
+			var gcid zkidentity.ShortID
+			if err := gcid.FromString(e.GCID); err != nil {
+				s.Reinvites.Clear(e.GCID)
+				continue
+			}
+			if _, err := c.GetGCDB(gcid); errors.Is(err, clientdb.ErrNotFound) {
+				s.Reinvites.Clear(e.GCID)
+				continue
+			}
+			blocked = append(blocked, e)
+		}
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(struct {
-		Invites []gcInviteSummary `json:"invites"`
-	}{Invites: out})
+		Invites          []gcInviteSummary   `json:"invites"`
+		BlockedReinvites []gcBlockedReinvite `json:"blocked_reinvites"`
+	}{Invites: out, BlockedReinvites: blocked})
 }
 
 func (s *StatusServer) handleGCInvitesAccept(w http.ResponseWriter, r *http.Request) {
@@ -411,8 +431,25 @@ func (s *StatusServer) handleGCPart(w http.ResponseWriter, r *http.Request, gcid
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req)
 	if err := c.PartFromGC(gcid, req.Reason); err != nil {
+		// PartFromGC deletes the GC before notifying members and the
+		// notify step errors spuriously when the GC has unKXd members
+		// (client_groupchat.go sendToGCMembers re-reads the deleted
+		// GC). If the GC entry is gone the part did its local job, so
+		// report success; this also makes parting an already-gone GC
+		// idempotent.
+		if _, gerr := c.GetGCDB(gcid); errors.Is(gerr, clientdb.ErrNotFound) {
+			s.Log.Warnf("Part from GC %s succeeded locally despite error: %v", gcid, err)
+			if s.Reinvites != nil {
+				s.Reinvites.Clear(gcid.String())
+			}
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		http.Error(w, "part: "+err.Error(), http.StatusInternalServerError)
 		return
+	}
+	if s.Reinvites != nil {
+		s.Reinvites.Clear(gcid.String())
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -429,6 +466,9 @@ func (s *StatusServer) handleGCKill(w http.ResponseWriter, r *http.Request, gcid
 	if err := c.KillGroupChat(gcid, req.Reason); err != nil {
 		http.Error(w, "kill: "+err.Error(), http.StatusInternalServerError)
 		return
+	}
+	if s.Reinvites != nil {
+		s.Reinvites.Clear(gcid.String())
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
