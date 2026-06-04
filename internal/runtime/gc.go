@@ -363,13 +363,16 @@ func (s *StatusServer) handleGCHistory(w http.ResponseWriter, r *http.Request, g
 	pageNum := parseNonNegativeInt(r.URL.Query().Get("page"), 0)
 
 	// ReadLogGCMsg keys the log file by GC name + ID, so fetch the
-	// metadata first.
+	// metadata first. The writers key by GroupChat.Name() (local alias
+	// when set, e.g. "trading_1" on a name collision; see bisonrelay
+	// client_groupchat.go:1075 logging by GCAlias), so the reader must
+	// resolve the same way or aliased GCs read an empty history.
 	dbGC, err := c.GetGCDB(gcid)
 	if err != nil {
 		http.Error(w, "get gc: "+err.Error(), http.StatusNotFound)
 		return
 	}
-	gcName := dbGC.Metadata.Name
+	gcName := dbGC.Name()
 
 	var entries []clientdb.PMLogEntry
 	err = s.DB.View(r.Context(), func(tx clientdb.ReadTx) error {
