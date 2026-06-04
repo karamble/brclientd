@@ -49,6 +49,8 @@ type Config struct {
 	EmbedsRoot        string
 	SeederCachePath   string
 	PagesDir          string
+	DataDir           string
+	AppDataDir        string
 
 	// SimpleStore hosting. When StoreEnabled, the node serves a simplestore
 	// from StoreDir over the relay instead of static pages (one resource
@@ -66,6 +68,11 @@ type Config struct {
 // LocalIDIniter is blocked waiting for a new identity, and finally hands
 // off to the long-running goroutines. Blocks until ctx is cancelled.
 func Run(ctx context.Context, cfg Config) error {
+	// Own cancel so the restore path below can unwind the already-running
+	// goroutines before returning.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	tracker := NewTracker(cfg.Log)
 	notifs := newNotifBus()
 	audioRouter := NewRTDTAudioRouter(cfg.LogFn("RTAU"))
@@ -90,6 +97,7 @@ func Run(ctx context.Context, cfg Config) error {
 		Notifs:      notifs,
 		AudioRouter: audioRouter,
 		PagesDir:    cfg.PagesDir,
+		DataDir:     cfg.DataDir,
 		AppName:     cfg.AppName,
 		AppVersion:  cfg.AppVersion,
 	}
@@ -135,6 +143,13 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 	statusSrv.SetClient(c)
+
+	// One-shot: a restore-triggered boot leaves a marker; initiate KX
+	// resets with all restored contacts once the server session is up.
+	kxMarker := setup.KXResetMarkerPath(cfg.AppDataDir)
+	g.Go(func() error {
+		return runPostRestoreKXReset(gctx, c, tracker, kxMarker, cfg.LogFn("KXRS"))
+	})
 
 	// Bind the resource provider for the persisted/default hosting mode (pages
 	// or simplestore) now that the client exists, and expose the controller so
@@ -191,8 +206,18 @@ func Run(ctx context.Context, cfg Config) error {
 			Certs:        cfg.Certs,
 			Listen:       primaryListen(cfg.ClientRPCListen),
 			IdentityChan: identityChan,
+			AppDataDir:   cfg.AppDataDir,
 		}
 		if err := preSetup.Run(gctx); err != nil {
+			if errors.Is(err, setup.ErrRestorePending) {
+				// A restore tarball was staged. Unwind the running
+				// goroutines so the clientdb closes cleanly, then
+				// surface the sentinel so main exits and the
+				// supervisor relaunch extracts the tarball.
+				cancel()
+				g.Wait()
+				return setup.ErrRestorePending
+			}
 			return fmt.Errorf("pre-setup endpoint: %w", err)
 		}
 		cfg.Log.Infof("Pre-setup endpoint stopped; identity submitted")

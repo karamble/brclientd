@@ -43,6 +43,7 @@ type StatusServer struct {
 	MsgsRoot    string
 	EmbedsRoot  string
 	PagesDir    string
+	DataDir     string
 	Notifs      *notifBus
 	AudioRouter *RTDTAudioRouter
 	AppName     string
@@ -50,6 +51,10 @@ type StatusServer struct {
 
 	clientMu sync.RWMutex
 	client   *client.Client
+
+	// backupMu serializes /backup requests; the backup holds a clientdb read
+	// transaction while it tars the whole data dir.
+	backupMu sync.Mutex
 
 	storeCtrlMu sync.RWMutex
 	storeCtrl   *storeController
@@ -98,6 +103,7 @@ func (s *StatusServer) Run(ctx context.Context) error {
 	mux.HandleFunc("/contacts", s.handleContacts)
 	mux.HandleFunc("/contacts/rename", s.handleRenameContact)
 	mux.HandleFunc("/contacts/kx-reset", s.handleKXReset)
+	mux.HandleFunc("/contacts/reset-all", s.handleKXResetAll)
 	mux.HandleFunc("/contacts/block", s.handleBlockContact)
 	mux.HandleFunc("/contacts/ignore", s.handleIgnoreContact)
 	mux.HandleFunc("/contacts/handshake", s.handleHandshake)
@@ -159,6 +165,7 @@ func (s *StatusServer) Run(ctx context.Context) error {
 	mux.HandleFunc("/pages/local/file", s.handlePagesLocalFile)
 	mux.HandleFunc("/pages/local/save", s.handlePagesLocalSave)
 	mux.HandleFunc("/pages/local/delete", s.handlePagesLocalDelete)
+	mux.HandleFunc("/backup", s.handleBackup)
 
 	srv := &http.Server{
 		Addr:              s.Listen,
@@ -236,6 +243,14 @@ func (s *StatusServer) handleHistoryPM(w http.ResponseWriter, r *http.Request) {
 		entries = got
 		return nil
 	})
+	if errors.Is(err, clientdb.ErrNotFound) {
+		// A contact with a missing addressbook identity file (seen in
+		// data restored from an incomplete KX) has no readable history;
+		// serve an empty thread instead of erroring the chat window.
+		s.Log.Warnf("history/pm: addressbook identity missing for %s; serving empty history", uidStr)
+		entries = nil
+		err = nil
+	}
 	if err != nil {
 		http.Error(w, "read pm log: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -351,6 +366,46 @@ func (s *StatusServer) handleKXReset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleKXResetAll initiates a ratchet reset with every contact whose last
+// received message is older than age_days (0 = upstream's 30-day default).
+// Mirrors brclient's /rresetold. Initiation only: the resets complete via
+// mailbox ping-pong whenever each peer comes online; no state is tracked.
+func (s *StatusServer) handleKXResetAll(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	c := s.currentClient()
+	if c == nil {
+		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
+		return
+	}
+	var req struct {
+		AgeDays int `json:"age_days"`
+	}
+	// An empty body selects the default age.
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	if req.AgeDays < 0 {
+		http.Error(w, "age_days must not be negative", http.StatusBadRequest)
+		return
+	}
+	interval := time.Duration(req.AgeDays) * 24 * time.Hour
+	res, err := c.ResetAllOldRatchets(interval, nil)
+	if err != nil {
+		http.Error(w, "reset all ratchets: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	started := make([]string, len(res))
+	for i, uid := range res {
+		started[i] = uid.String()
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(struct {
+		Started []string `json:"started"`
+		Count   int      `json:"count"`
+	}{Started: started, Count: len(started)})
 }
 
 // handleBlockContact blocks a user. Mirrors bruig's "Block User" action;
@@ -1188,6 +1243,60 @@ func (s *StatusServer) handleContentFile(w http.ResponseWriter, r *http.Request)
 	// ServeContent sniffs the content type (by extension then bytes) and
 	// supports range requests for large files.
 	http.ServeContent(w, r, filename, modtime, f)
+}
+
+// handleBackup streams a full-state backup tarball produced by BR's
+// client.Backup: the entire data dir (db, msgs, embeds, downloads, pages,
+// store, ...) snapshotted under a clientdb read transaction, so it is
+// consistent while the node keeps running. The tarball is written to a temp
+// dir outside the data dir (so it is not walked into itself) and removed
+// after serving.
+func (s *StatusServer) handleBackup(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	c := s.currentClient()
+	if c == nil {
+		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
+		return
+	}
+	if s.DataDir == "" {
+		http.Error(w, "data dir not configured", http.StatusInternalServerError)
+		return
+	}
+	if !s.backupMu.TryLock() {
+		http.Error(w, "a backup is already in progress", http.StatusConflict)
+		return
+	}
+	defer s.backupMu.Unlock()
+
+	tmpDir, err := os.MkdirTemp("", "brclientd-backup-")
+	if err != nil {
+		http.Error(w, "create temp dir: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer os.RemoveAll(tmpDir)
+
+	path, err := c.Backup(r.Context(), s.DataDir, tmpDir)
+	if err != nil {
+		http.Error(w, "backup: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		http.Error(w, "open backup: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer f.Close()
+	var modtime time.Time
+	if info, err := f.Stat(); err == nil {
+		modtime = info.ModTime()
+	}
+	name := filepath.Base(path)
+	w.Header().Set("Content-Type", "application/gzip")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", name))
+	http.ServeContent(w, r, name, modtime, f)
 }
 
 // handleRates returns the current exchange rates (USD per DCR and per BTC).

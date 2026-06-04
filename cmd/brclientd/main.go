@@ -21,6 +21,7 @@ import (
 	"github.com/karamble/brclientd/internal/identity"
 	brlog "github.com/karamble/brclientd/internal/log"
 	"github.com/karamble/brclientd/internal/runtime"
+	"github.com/karamble/brclientd/internal/setup"
 )
 
 // Version is set at build time from the git tag via
@@ -60,6 +61,12 @@ func run(args []string) error {
 		return errors.New("dcrlnd.tlscertpath and dcrlnd.macaroonpath are required")
 	}
 
+	// A staged restore tarball must be extracted before anything below
+	// opens the clientdb or generates certs.
+	if err := applyPendingRestore(cfg); err != nil {
+		return err
+	}
+
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
@@ -94,12 +101,18 @@ func run(args []string) error {
 		EmbedsRoot:        idPaths.EmbedsRoot,
 		SeederCachePath:   filepath.Join(cfg.DataDir, "seeder-cache.json"),
 		PagesDir:          filepath.Join(cfg.DataDir, "pages"),
+		DataDir:           cfg.DataDir,
+		AppDataDir:        cfg.AppDataDir,
 		StoreEnabled:      cfg.SimpleStore.Enabled,
 		StoreDir:          filepath.Join(cfg.DataDir, "store"),
 		StorePayType:      cfg.SimpleStore.PayType,
 		StoreAccount:      cfg.SimpleStore.Account,
 		StoreShipCharge:   cfg.SimpleStore.ShipCharge,
 	})
+	if errors.Is(err, setup.ErrRestorePending) {
+		brlog.BRCD.Infof("Restore staged; exiting for supervisor relaunch")
+		return nil
+	}
 	if err != nil && !errors.Is(err, context.Canceled) {
 		return err
 	}
