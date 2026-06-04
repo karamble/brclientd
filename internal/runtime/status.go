@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/companyzero/bisonrelay/client/clientintf"
 	"github.com/decred/slog"
 )
 
@@ -47,6 +48,12 @@ type Tracker struct {
 	mu     sync.RWMutex
 	status Status
 	log    slog.Logger
+
+	// policy is the last server policy seen on a session-change
+	// notification; kept so the Connection settings card can show
+	// policy values while the client is between sessions.
+	policy    clientintf.ServerPolicy
+	hasPolicy bool
 }
 
 // NewTracker returns a Tracker initialised with stage=waiting-for-dcrlnd.
@@ -122,6 +129,22 @@ func (t *Tracker) Get() Status {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	return t.status
+}
+
+// SetServerPolicy records the policy delivered with a server session change.
+func (t *Tracker) SetServerPolicy(p clientintf.ServerPolicy) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.policy = p
+	t.hasPolicy = true
+}
+
+// ServerPolicySnapshot returns the last-seen server policy, if any session
+// has delivered one since boot.
+func (t *Tracker) ServerPolicySnapshot() (clientintf.ServerPolicy, bool) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.policy, t.hasPolicy
 }
 
 // SetNick updates the identity nick once and never changes again.

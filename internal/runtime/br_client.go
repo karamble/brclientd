@@ -57,8 +57,11 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 	dialer := cachedSeederDialer(cfg.BRServer, cfg.LogFn("CONN"), netDialer.DialContext, cfg.SeederCachePath)
 
 	ntfns := client.NewNotificationManager()
-	ntfns.Register(client.OnServerSessionChangedNtfn(func(connected bool, _ clientintf.ServerPolicy) {
+	ntfns.Register(client.OnServerSessionChangedNtfn(func(connected bool, policy clientintf.ServerPolicy) {
 		cfg.Tracker.SetConnected(connected)
+		if connected {
+			cfg.Tracker.SetServerPolicy(policy)
+		}
 	}))
 
 	// OnResourceFetched fires when a page (resource) reply lands, for both

@@ -56,6 +56,12 @@ type StatusServer struct {
 	// transaction while it tars the whole data dir.
 	backupMu sync.Mutex
 
+	// remainOffline mirrors the last requested connection intent. BR has
+	// no getter for it (GoOnline/RemainOffline only feed the ConnKeeper),
+	// and the daemon always boots online, so false is the right default.
+	onlineMu      sync.RWMutex
+	remainOffline bool
+
 	storeCtrlMu sync.RWMutex
 	storeCtrl   *storeController
 }
@@ -166,6 +172,11 @@ func (s *StatusServer) Run(ctx context.Context) error {
 	mux.HandleFunc("/pages/local/save", s.handlePagesLocalSave)
 	mux.HandleFunc("/pages/local/delete", s.handlePagesLocalDelete)
 	mux.HandleFunc("/backup", s.handleBackup)
+	mux.HandleFunc("/connection", s.handleConnection)
+	mux.HandleFunc("/filters", s.handleFilters)
+	mux.HandleFunc("/filters/delete", s.handleDeleteFilter)
+	mux.HandleFunc("/posts/subscribe-all", s.handleSubscribeAllPosts)
+	mux.HandleFunc("/kx/list", s.handleKXList)
 
 	srv := &http.Server{
 		Addr:              s.Listen,
@@ -2325,9 +2336,22 @@ type policyOut struct {
 	PushPayRateMAtoms    uint64 `json:"push_pay_rate_matoms"`
 	PushPayRateBytes     uint64 `json:"push_pay_rate_bytes"`
 	PushPayRateMinMAtoms uint64 `json:"push_pay_rate_min_matoms"`
+	SubPayRate           uint64 `json:"sub_pay_rate"`
 	MaxPushInvoices      int    `json:"max_push_invoices"`
 	MaxMsgSize           uint   `json:"max_msg_size"`
 	ExpirationDays       int    `json:"expiration_days"`
+}
+
+func policyOutFrom(p clientintf.ServerPolicy) policyOut {
+	return policyOut{
+		PushPayRateMAtoms:    p.PushPayRateMAtoms,
+		PushPayRateBytes:     p.PushPayRateBytes,
+		PushPayRateMinMAtoms: p.PushPayRateMinMAtoms,
+		SubPayRate:           p.SubPayRate,
+		MaxPushInvoices:      p.MaxPushInvoices,
+		MaxMsgSize:           p.MaxMsgSize,
+		ExpirationDays:       p.ExpirationDays,
+	}
 }
 
 func policyFromSession(c *client.Client) policyOut {
@@ -2335,15 +2359,7 @@ func policyFromSession(c *client.Client) policyOut {
 	if sess == nil {
 		return policyOut{}
 	}
-	p := sess.Policy()
-	return policyOut{
-		PushPayRateMAtoms:    p.PushPayRateMAtoms,
-		PushPayRateBytes:     p.PushPayRateBytes,
-		PushPayRateMinMAtoms: p.PushPayRateMinMAtoms,
-		MaxPushInvoices:      p.MaxPushInvoices,
-		MaxMsgSize:           p.MaxMsgSize,
-		ExpirationDays:       p.ExpirationDays,
-	}
+	return policyOutFrom(sess.Policy())
 }
 
 type topContactOut struct {

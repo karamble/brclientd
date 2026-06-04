@@ -10,7 +10,9 @@ import (
 	"encoding/json"
 	"net/http"
 	goruntime "runtime"
+	"runtime/debug"
 	"strings"
+	"sync"
 )
 
 // client_endpoints.go exposes a handful of BR client methods over the status
@@ -19,21 +21,41 @@ import (
 // AcceptInvite}, PaymentsService.TipUser). Mirroring them here keeps the status
 // surface a complete, self-contained REST API for any consumer.
 
+// brClientLibVersion resolves the bisonrelay client library version baked
+// into the binary, reflecting any replace/pin in go.mod.
+var brClientLibVersion = sync.OnceValue(func() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return ""
+	}
+	for _, dep := range info.Deps {
+		if dep.Path == "github.com/companyzero/bisonrelay" {
+			if dep.Replace != nil {
+				return dep.Replace.Version
+			}
+			return dep.Version
+		}
+	}
+	return ""
+})
+
 // handleVersion reports the daemon name/version triple, replicating clientrpc
-// VersionService.Version.
+// VersionService.Version, plus the BR client library version in use.
 func (s *StatusServer) handleVersion(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	resp := struct {
-		AppName    string `json:"appName"`
-		AppVersion string `json:"appVersion"`
-		GoRuntime  string `json:"goRuntime"`
+		AppName         string `json:"appName"`
+		AppVersion      string `json:"appVersion"`
+		GoRuntime       string `json:"goRuntime"`
+		BRClientVersion string `json:"brClientVersion,omitempty"`
 	}{
-		AppName:    s.AppName,
-		AppVersion: s.AppVersion,
-		GoRuntime:  goruntime.Version(),
+		AppName:         s.AppName,
+		AppVersion:      s.AppVersion,
+		GoRuntime:       goruntime.Version(),
+		BRClientVersion: brClientLibVersion(),
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
