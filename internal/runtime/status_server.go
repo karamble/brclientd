@@ -904,20 +904,26 @@ func (s *StatusServer) handleSharedFiles(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	type sharedFile struct {
-		FID      string `json:"fid"`
-		Filename string `json:"filename"`
-		Cost     uint64 `json:"cost"`
-		Size     uint64 `json:"size"`
-		Global   bool   `json:"global"`
+		FID      string   `json:"fid"`
+		Filename string   `json:"filename"`
+		Cost     uint64   `json:"cost"`
+		Size     uint64   `json:"size"`
+		Global   bool     `json:"global"`
+		Shares   []string `json:"shares"`
 	}
 	out := make([]sharedFile, 0, len(files))
 	for _, f := range files {
+		shares := make([]string, 0, len(f.Shares))
+		for _, id := range f.Shares {
+			shares = append(shares, id.String())
+		}
 		out = append(out, sharedFile{
 			FID:      f.SF.FID.String(),
 			Filename: f.SF.Filename,
 			Cost:     f.Cost,
 			Size:     f.Size,
 			Global:   f.Global,
+			Shares:   shares,
 		})
 	}
 	w.Header().Set("Content-Type", "application/json")
