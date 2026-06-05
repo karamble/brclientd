@@ -49,6 +49,7 @@ type StatusServer struct {
 	Reinvites    *gcReinviteTracker
 	Unrepl       *unreplTracker
 	DownloadCaps *downloadCapTracker
+	Notes        *notificationStore
 	AppName      string
 	AppVersion   string
 
@@ -166,6 +167,7 @@ func (s *StatusServer) Run(ctx context.Context) error {
 	mux.HandleFunc("/store/templates/save", s.handleStoreTemplateSave)
 	mux.HandleFunc("/store/templates/delete", s.handleStoreTemplateDelete)
 	mux.HandleFunc("/notifications", s.handleNotifications)
+	mux.HandleFunc("/notifications/recent", s.handleRecentNotifications)
 	mux.HandleFunc("/version", s.handleVersion)
 	mux.HandleFunc("/public-identity", s.handlePublicIdentity)
 	mux.HandleFunc("/avatar", s.handleSetAvatar)
@@ -2171,6 +2173,30 @@ func (s *StatusServer) handlePostReceiveReceipts(w http.ResponseWriter, r *http.
 // see them in real time. Events brclientd publishes here are ones BR has no
 // upstream clientrpc stream for (e.g. OnKXSuggested) plus any other
 // daemon-side notifications we surface in the future.
+// handleRecentNotifications returns the persisted daemon notes (newest
+// first) that power the dashboard's notification bell. Unlike the live
+// /notifications stream these survive the browser being closed.
+func (s *StatusServer) handleRecentNotifications(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.Notes == nil {
+		http.Error(w, "notification store not configured", http.StatusServiceUnavailable)
+		return
+	}
+	n := 50
+	if v := strings.TrimSpace(r.URL.Query().Get("n")); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 && parsed <= maxStoredNotes {
+			n = parsed
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(struct {
+		Notifications []brNote `json:"notifications"`
+	}{Notifications: s.Notes.recent(n)})
+}
+
 func (s *StatusServer) handleNotifications(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

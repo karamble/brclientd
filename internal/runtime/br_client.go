@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/companyzero/bisonrelay/client"
@@ -19,6 +20,7 @@ import (
 	"github.com/companyzero/bisonrelay/rpc"
 	rtdtclient "github.com/companyzero/bisonrelay/rtdt/client"
 	"github.com/companyzero/bisonrelay/zkidentity"
+	"github.com/decred/dcrlnd/lnrpc"
 	"github.com/decred/slog"
 )
 
@@ -37,6 +39,7 @@ type BRClientCfg struct {
 	Reinvites       *gcReinviteTracker
 	Unrepl          *unreplTracker
 	DownloadCaps    *downloadCapTracker
+	Notes           *notificationStore
 	LogFn           func(subsys string) slog.Logger
 	IdentityChan    <-chan *zkidentity.FullIdentity
 
@@ -252,6 +255,124 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 					"author_nick": summary.AuthorNick,
 					"date":        summary.Date.Unix(),
 					"title":       summary.Title,
+				},
+			})
+		}
+	}))
+
+	// BR swallows host-side chunk-invoice failures: genInvoiceForFTUpload's
+	// error is only logged and the getter receives no reply, so a buyer of
+	// a paid file stalls silently when this node cannot RECEIVE the
+	// payment. Observe inbound chunk requests and warn when the share's
+	// cost exceeds the current LN inbound capacity. The full file cost is
+	// the estimate: exact for single-chunk files (the common case), an
+	// upper bound otherwise. Async registration: this queries dcrlnd and
+	// must not block the RM loop. Throttled per buyer+file because getters
+	// retry chunk requests.
+	var saleWarnMu sync.Mutex
+	saleWarned := make(map[string]time.Time)
+	ntfns.Register(client.OnRMReceived(func(ru *client.RemoteUser, _ *rpc.RMHeader, p interface{}, _ time.Time) {
+		req, ok := p.(rpc.RMFTGetChunk)
+		if !ok || brc == nil || cfg.DcrlndPay == nil {
+			return
+		}
+		files, err := brc.ListLocalSharedFiles()
+		if err != nil {
+			return
+		}
+		var cost uint64
+		var filename string
+		found := false
+		for _, f := range files {
+			if f.SF.FID.String() == req.FileID {
+				cost = f.Cost
+				filename = f.SF.Filename
+				found = true
+				break
+			}
+		}
+		if !found || cost == 0 {
+			return
+		}
+		uid := ru.ID().String()
+		warnKey := uid + "/" + req.FileID
+		saleWarnMu.Lock()
+		last, warned := saleWarned[warnKey]
+		if warned && time.Since(last) < 10*time.Minute {
+			saleWarnMu.Unlock()
+			return
+		}
+		saleWarned[warnKey] = time.Now()
+		saleWarnMu.Unlock()
+		bal, err := cfg.DcrlndPay.LNRPC().ChannelBalance(context.Background(), &lnrpc.ChannelBalanceRequest{})
+		if err != nil {
+			nlog.Warnf("ChannelBalance for sale capacity check: %v", err)
+			return
+		}
+		if bal.MaxInboundAmount >= int64(cost) {
+			return
+		}
+		missing := int64(cost) - bal.MaxInboundAmount
+		nick := ru.Nick()
+		detail := fmt.Sprintf("%s tried to buy %q (%s DCR) but this node lacks inbound capacity to receive the payment (missing %s DCR). Request an inbound channel to fix this.",
+			nick, filename, formatDCR(float64(cost)/1e8), formatDCR(float64(missing)/1e8))
+		nlog.Warnf("%s", detail)
+		if cfg.Notes != nil {
+			cfg.Notes.add("warn", "Sale blocked: "+filename, detail, uid)
+		}
+		logErr := cfg.DB.Update(context.Background(), func(tx clientdb.ReadWriteTx) error {
+			_, err := cfg.DB.LogPM(tx, ru.ID(), true, "", detail, time.Now())
+			return err
+		})
+		if logErr != nil {
+			nlog.Warnf("Log blocked sale to PM history: %v", logErr)
+		}
+		if cfg.Notifs != nil {
+			cfg.Notifs.Publish(NotifEvent{
+				Type: "file-invoice-capacity-low",
+				Payload: map[string]any{
+					"uid":               uid,
+					"nick":              nick,
+					"fid":               req.FileID,
+					"filename":          filename,
+					"cost_atoms":        cost,
+					"max_inbound_atoms": bal.MaxInboundAmount,
+					"missing_atoms":     missing,
+					"text":              detail,
+				},
+			})
+		}
+	}))
+
+	// OnInvoiceGenFailedNtfn fires when generating a TIP invoice for a
+	// remote user fails (e.g. dcrlnd rejects it for missing inbound
+	// capacity). File-chunk invoice failures do NOT reach this hook; the
+	// OnRMReceived observer above covers those.
+	ntfns.Register(client.OnInvoiceGenFailedNtfn(func(ru *client.RemoteUser, dcrAmount float64, genErr error) {
+		uid := ru.ID().String()
+		nick := ru.Nick()
+		detail := fmt.Sprintf("Could not generate an invoice for %s (%s DCR): %v",
+			nick, formatDCR(dcrAmount), genErr)
+		nlog.Warnf("%s", detail)
+		if cfg.Notes != nil {
+			cfg.Notes.add("error", "Invoice failed for "+nick, detail, uid)
+		}
+		logErr := cfg.DB.Update(context.Background(), func(tx clientdb.ReadWriteTx) error {
+			_, err := cfg.DB.LogPM(tx, ru.ID(), true, "", detail, time.Now())
+			return err
+		})
+		if logErr != nil {
+			nlog.Warnf("Log invoice failure to PM history: %v", logErr)
+		}
+		if cfg.Notifs != nil {
+			cfg.Notifs.Publish(NotifEvent{
+				Type: "invoice-gen-failed",
+				Payload: map[string]any{
+					"uid":        uid,
+					"nick":       nick,
+					"dcr_amount": dcrAmount,
+					"error":      genErr.Error(),
+					"text":       detail,
 				},
 			})
 		}

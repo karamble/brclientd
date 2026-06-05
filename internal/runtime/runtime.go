@@ -85,6 +85,7 @@ func Run(ctx context.Context, cfg Config) error {
 	reinvites := newGCReinviteTracker()
 	unrepl := newUnreplTracker()
 	downloadCaps := newDownloadCapTracker()
+	notes := newNotificationStore(cfg.DataDir)
 	brSettings := newBRSettingsStore(cfg.DataDir)
 	effectiveSRR := brSettings.sendReceiveReceipts()
 	restartCh := make(chan struct{})
@@ -111,6 +112,7 @@ func Run(ctx context.Context, cfg Config) error {
 		Reinvites:    reinvites,
 		Unrepl:       unrepl,
 		DownloadCaps: downloadCaps,
+		Notes:        notes,
 		Settings:     brSettings,
 		SRREffective: effectiveSRR,
 		RestartCh:    restartCh,
@@ -156,6 +158,7 @@ func Run(ctx context.Context, cfg Config) error {
 		Reinvites:           reinvites,
 		Unrepl:              unrepl,
 		DownloadCaps:        downloadCaps,
+		Notes:               notes,
 		SendReceiveReceipts: effectiveSRR,
 		LogFn:               cfg.LogFn,
 		IdentityChan:        identityChan,
