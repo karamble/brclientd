@@ -36,6 +36,7 @@ type BRClientCfg struct {
 	AudioRouter     *RTDTAudioRouter
 	Reinvites       *gcReinviteTracker
 	Unrepl          *unreplTracker
+	DownloadCaps    *downloadCapTracker
 	LogFn           func(subsys string) slog.Logger
 	IdentityChan    <-chan *zkidentity.FullIdentity
 
@@ -962,6 +963,33 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 		// and bruig's typical config.
 		AutoSubscribeToPosts: true,
 		SendReceiveReceipts:  cfg.SendReceiveReceipts,
+
+		// The cost advertised in a post embed is advisory; the host invoices
+		// from the cost stored on its share, which only arrives with the
+		// file metadata here. Pay only up to the cap the caller approved
+		// when requesting the download (absent cap = free files only) and
+		// surface the real price otherwise so the UI can re-confirm.
+		FileDownloadConfirmer: func(ru *client.RemoteUser, fm rpc.FileMetadata) bool {
+			fid := clientdb.FileID(fm.MetadataHash())
+			maxCost := cfg.DownloadCaps.take(ru.ID().String(), fid.String())
+			if fm.Cost <= maxCost {
+				return true
+			}
+			if cfg.Notifs != nil {
+				cfg.Notifs.Publish(NotifEvent{
+					Type: "file-download-cost-rejected",
+					Payload: map[string]any{
+						"uid":            ru.ID().String(),
+						"fid":            fid.String(),
+						"filename":       fm.Filename,
+						"size":           fm.Size,
+						"cost_atoms":     fm.Cost,
+						"max_cost_atoms": maxCost,
+					},
+				})
+			}
+			return false
+		},
 
 		LocalIDIniter: func(ctx context.Context) (*zkidentity.FullIdentity, error) {
 			select {

@@ -84,6 +84,7 @@ func Run(ctx context.Context, cfg Config) error {
 	audioRouter := NewRTDTAudioRouter(cfg.LogFn("RTAU"))
 	reinvites := newGCReinviteTracker()
 	unrepl := newUnreplTracker()
+	downloadCaps := newDownloadCapTracker()
 	brSettings := newBRSettingsStore(cfg.DataDir)
 	effectiveSRR := brSettings.sendReceiveReceipts()
 	restartCh := make(chan struct{})
@@ -109,6 +110,7 @@ func Run(ctx context.Context, cfg Config) error {
 		AudioRouter:  audioRouter,
 		Reinvites:    reinvites,
 		Unrepl:       unrepl,
+		DownloadCaps: downloadCaps,
 		Settings:     brSettings,
 		SRREffective: effectiveSRR,
 		RestartCh:    restartCh,
@@ -153,6 +155,7 @@ func Run(ctx context.Context, cfg Config) error {
 		AudioRouter:         audioRouter,
 		Reinvites:           reinvites,
 		Unrepl:              unrepl,
+		DownloadCaps:        downloadCaps,
 		SendReceiveReceipts: effectiveSRR,
 		LogFn:               cfg.LogFn,
 		IdentityChan:        identityChan,

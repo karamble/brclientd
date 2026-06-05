@@ -34,22 +34,23 @@ import (
 // /history/pm for paginated PM history reads (a wire-exposed wrapper around
 // clientdb.ReadLogPM since BR's clientrpc.proto has no history RPC).
 type StatusServer struct {
-	Log         slog.Logger
-	Certs       certgen.Triplet
-	Listen      string
-	Tracker     *Tracker
-	DB          *clientdb.DB
-	UploadDir   string
-	MsgsRoot    string
-	EmbedsRoot  string
-	PagesDir    string
-	DataDir     string
-	Notifs      *notifBus
-	AudioRouter *RTDTAudioRouter
-	Reinvites   *gcReinviteTracker
-	Unrepl      *unreplTracker
-	AppName     string
-	AppVersion  string
+	Log          slog.Logger
+	Certs        certgen.Triplet
+	Listen       string
+	Tracker      *Tracker
+	DB           *clientdb.DB
+	UploadDir    string
+	MsgsRoot     string
+	EmbedsRoot   string
+	PagesDir     string
+	DataDir      string
+	Notifs       *notifBus
+	AudioRouter  *RTDTAudioRouter
+	Reinvites    *gcReinviteTracker
+	Unrepl       *unreplTracker
+	DownloadCaps *downloadCapTracker
+	AppName      string
+	AppVersion   string
 
 	// Settings persists dashboard-changeable daemon settings; SRREffective is
 	// the send-receive-receipts value this process booted with (fixed at BR
@@ -1186,18 +1187,21 @@ func (s *StatusServer) handleDownloadCancel(w http.ResponseWriter, r *http.Reque
 
 // handleContentGet initiates a download of a shared file (FID) from a remote
 // user, as advertised by an --embed[download=<fid>,cost=,...]-- tag in a post
-// or page. BR fetches the file metadata, auto-pays per-chunk for any cost the
-// uploader set, and writes the bytes to disk. Progress surfaces via /downloads
-// and the file-download-progress / file-download-completed events. Body:
-// {uid, fid}.
+// or page. BR fetches the file metadata and pays per-chunk only when the cost
+// stored on the host's share is at most max_cost_atoms (default 0 = free
+// files only); a higher real cost cancels the download and emits a
+// file-download-cost-rejected event carrying the actual price. Progress
+// surfaces via /downloads and the file-download-progress /
+// file-download-completed events. Body: {uid, fid, max_cost_atoms?}.
 func (s *StatusServer) handleContentGet(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	var req struct {
-		UID string `json:"uid"`
-		FID string `json:"fid"`
+		UID          string `json:"uid"`
+		FID          string `json:"fid"`
+		MaxCostAtoms uint64 `json:"max_cost_atoms"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
@@ -1218,6 +1222,9 @@ func (s *StatusServer) handleContentGet(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
 		return
 	}
+	// Recorded before the request goes out; the metadata reply arrives
+	// async and FileDownloadConfirmer consumes the cap there.
+	s.DownloadCaps.set(uid.String(), fid.String(), req.MaxCostAtoms)
 	if err := c.GetUserContent(uid, fid); err != nil {
 		http.Error(w, "get user content: "+err.Error(), http.StatusBadGateway)
 		return
