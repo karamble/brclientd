@@ -176,6 +176,8 @@ func (s *StatusServer) Run(ctx context.Context) error {
 	mux.HandleFunc("/invites/create", s.handleCreateInvite)
 	mux.HandleFunc("/invites/accept", s.handleAcceptInvite)
 	mux.HandleFunc("/tip", s.handleTip)
+	mux.HandleFunc("/payments/tips", s.handleTipAttempts)
+	mux.HandleFunc("/payments/tips/running", s.handleRunningTipAttempts)
 	mux.HandleFunc("/invites/redeem-key", s.handleRedeemPaidInvite)
 	mux.HandleFunc("/files/send", s.handleSendFile)
 	mux.HandleFunc("/stats/overview", s.handleStatsOverview)
@@ -2242,6 +2244,122 @@ func (s *StatusServer) handlePostCommentReceiveReceipts(w http.ResponseWriter, r
 	_ = json.NewEncoder(w).Encode(struct {
 		Receipts map[string][]receipt `json:"receipts"`
 	}{Receipts: out})
+}
+
+// tipAttemptRow is the wire shape of one tracked tip attempt. Invoices are
+// omitted (large bolt11 strings the dashboard has no use for).
+type tipAttemptRow struct {
+	UID                  string     `json:"uid"`
+	Tag                  int32      `json:"tag"`
+	AmountMAtoms         uint64     `json:"amount_matoms"`
+	Created              time.Time  `json:"created"`
+	Attempts             int32      `json:"attempts"`
+	MaxAttempts          int32      `json:"max_attempts"`
+	InvoiceRequested     *time.Time `json:"invoice_requested,omitempty"`
+	PaymentAttempt       *time.Time `json:"payment_attempt,omitempty"`
+	PaymentAttemptCount  uint32     `json:"payment_attempt_count"`
+	PaymentAttemptFailed *time.Time `json:"payment_attempt_failed,omitempty"`
+	LastInvoiceError     *string    `json:"last_invoice_error,omitempty"`
+	Completed            *time.Time `json:"completed,omitempty"`
+}
+
+// handleTipAttempts lists the locally tracked tip attempts to one contact:
+// amounts, retry counts, invoice/payment timestamps, and completion state.
+func (s *StatusServer) handleTipAttempts(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	c := s.currentClient()
+	if c == nil {
+		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
+		return
+	}
+	uid, ok := parseUIDHex(w, "uid", strings.TrimSpace(r.URL.Query().Get("uid")))
+	if !ok {
+		return
+	}
+	atts, err := c.ListTipUserAttempts(uid)
+	if err != nil {
+		http.Error(w, "list tip attempts: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	out := make([]tipAttemptRow, 0, len(atts))
+	for _, a := range atts {
+		out = append(out, tipAttemptRow{
+			UID:                  a.UID.String(),
+			Tag:                  a.Tag,
+			AmountMAtoms:         a.MilliAtoms,
+			Created:              a.Created,
+			Attempts:             a.Attempts,
+			MaxAttempts:          a.MaxAttempts,
+			InvoiceRequested:     a.InvoiceRequested,
+			PaymentAttempt:       a.PaymentAttempt,
+			PaymentAttemptCount:  a.PaymentAttemptCount,
+			PaymentAttemptFailed: a.PaymentAttemptFailed,
+			LastInvoiceError:     a.LastInvoiceError,
+			Completed:            a.Completed,
+		})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(struct {
+		Attempts []tipAttemptRow `json:"attempts"`
+	}{Attempts: out})
+}
+
+// handleRunningTipAttempts lists the tip attempts the daemon is actively
+// driving, with the next scheduled action; amounts are joined from the
+// per-user attempt records via the tag.
+func (s *StatusServer) handleRunningTipAttempts(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	c := s.currentClient()
+	if c == nil {
+		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
+		return
+	}
+	running, err := c.ListRunningTipUserAttempts()
+	if err != nil {
+		http.Error(w, "list running tip attempts: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	type runningRow struct {
+		UID            string    `json:"uid"`
+		Nick           string    `json:"nick"`
+		Tag            int32     `json:"tag"`
+		NextAction     string    `json:"next_action"`
+		NextActionTime time.Time `json:"next_action_time"`
+		AmountMAtoms   uint64    `json:"amount_matoms"`
+	}
+	amounts := make(map[string]map[int32]uint64)
+	out := make([]runningRow, 0, len(running))
+	for _, ra := range running {
+		uidStr := ra.UID.String()
+		byTag, ok := amounts[uidStr]
+		if !ok {
+			byTag = make(map[int32]uint64)
+			if atts, err := c.ListTipUserAttempts(ra.UID); err == nil {
+				for _, a := range atts {
+					byTag[a.Tag] = a.MilliAtoms
+				}
+			}
+			amounts[uidStr] = byTag
+		}
+		out = append(out, runningRow{
+			UID:            uidStr,
+			Nick:           c.UserLogNick(ra.UID),
+			Tag:            ra.Tag,
+			NextAction:     ra.NextAction,
+			NextActionTime: ra.NextActionTime,
+			AmountMAtoms:   byTag[ra.Tag],
+		})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(struct {
+		Running []runningRow `json:"running"`
+	}{Running: out})
 }
 
 // handleNotifications streams JSONL events from the in-process notif bus to

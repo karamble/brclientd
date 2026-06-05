@@ -581,6 +581,24 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 		})
 	}))
 
+	// OnTipUserInvoiceGeneratedNtfn fires when the remote user's invoice
+	// for one of our tip attempts arrives; the visible gap between
+	// "requesting invoice" and the terminal tip-sent/tip-failed can
+	// otherwise last hours (invoices are re-requested daily).
+	ntfns.Register(client.OnTipUserInvoiceGeneratedNtfn(func(ru *client.RemoteUser, tag uint32, _ string) {
+		if cfg.Notifs == nil {
+			return
+		}
+		cfg.Notifs.Publish(NotifEvent{
+			Type: "tip-invoice-generated",
+			Payload: map[string]any{
+				"uid":  ru.ID().String(),
+				"nick": ru.Nick(),
+				"tag":  tag,
+			},
+		})
+	}))
+
 	// OnPostStatusRcvdNtfn fires when a status update on a post (comment,
 	// heart, etc.) arrives — either ours arriving back via the relay or
 	// someone else's on a post we already know about. We fan it out as
