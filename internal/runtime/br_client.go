@@ -360,6 +360,7 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 			Payload: map[string]any{
 				"uid":       ru.ID().String(),
 				"nick":      ru.Nick(),
+				"fid":       clientdb.FileID(fm.MetadataHash()).String(),
 				"filename":  fm.Filename,
 				"size":      fm.Size,
 				"disk_path": diskPath,
