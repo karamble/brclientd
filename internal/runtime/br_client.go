@@ -17,6 +17,7 @@ import (
 	"github.com/companyzero/bisonrelay/client/clientdb"
 	"github.com/companyzero/bisonrelay/client/clientintf"
 	"github.com/companyzero/bisonrelay/client/resources"
+	"github.com/companyzero/bisonrelay/ratchet"
 	"github.com/companyzero/bisonrelay/rpc"
 	rtdtclient "github.com/companyzero/bisonrelay/rtdt/client"
 	"github.com/companyzero/bisonrelay/zkidentity"
@@ -523,6 +524,61 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 				},
 			})
 		}
+	}))
+
+	// OnRMSent fires after the relay server acks an outbound RM. PMs get a
+	// delivery event so the chat UI can upgrade its sent tick: the send
+	// endpoint returns at queue time and nothing else confirms the message
+	// actually reached the server.
+	ntfns.Register(client.OnRMSent(func(ru *client.RemoteUser, _ ratchet.RVPoint, p interface{}) {
+		if cfg.Notifs == nil {
+			return
+		}
+		var msg string
+		switch v := p.(type) {
+		case rpc.RMPrivateMessage:
+			msg = v.Message
+		case *rpc.RMPrivateMessage:
+			msg = v.Message
+		default:
+			return
+		}
+		cfg.Notifs.Publish(NotifEvent{
+			Type: "pm-delivered",
+			Payload: map[string]any{
+				"uid":     ru.ID().String(),
+				"nick":    ru.Nick(),
+				"message": msg,
+			},
+		})
+	}))
+
+	// OnReceiveReceipt fires when a remote client acknowledges receiving
+	// one of our posts (domain "posts") or a comment we relayed (domain
+	// "postcomments"); lets the dashboard refresh Seen by rows live.
+	ntfns.Register(client.OnReceiveReceipt(func(ru *client.RemoteUser, rr rpc.RMReceiveReceipt, serverTime time.Time) {
+		if cfg.Notifs == nil {
+			return
+		}
+		id := ""
+		if rr.ID != nil {
+			id = rr.ID.String()
+		}
+		subID := ""
+		if rr.SubID != nil {
+			subID = rr.SubID.String()
+		}
+		cfg.Notifs.Publish(NotifEvent{
+			Type: "receive-receipt",
+			Payload: map[string]any{
+				"uid":         ru.ID().String(),
+				"nick":        ru.Nick(),
+				"domain":      string(rr.Domain),
+				"id":          id,
+				"sub_id":      subID,
+				"server_time": serverTime.UnixMilli(),
+			},
+		})
 	}))
 
 	// OnPostStatusRcvdNtfn fires when a status update on a post (comment,

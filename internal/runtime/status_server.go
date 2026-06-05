@@ -146,6 +146,7 @@ func (s *StatusServer) Run(ctx context.Context) error {
 	mux.HandleFunc("/posts/hearts", s.handlePostHearts)
 	mux.HandleFunc("/posts/heart", s.handlePostHeart)
 	mux.HandleFunc("/posts/receivereceipts", s.handlePostReceiveReceipts)
+	mux.HandleFunc("/posts/comment-receivereceipts", s.handlePostCommentReceiveReceipts)
 	mux.HandleFunc("/posts/new", s.handlePostsNew)
 	mux.HandleFunc("/shared-files", s.handleSharedFiles)
 	mux.HandleFunc("/shared-files/add", s.handleSharedFileAdd)
@@ -1883,6 +1884,7 @@ func (s *StatusServer) handlePostComments(w http.ResponseWriter, r *http.Request
 		Parent       string `json:"parent,omitempty"`
 		Timestamp    int64  `json:"timestamp"`
 		Identifier   string `json:"identifier,omitempty"`
+		StatusID     string `json:"status_id,omitempty"`
 		Unreplicated bool   `json:"unreplicated,omitempty"`
 	}
 	out := make([]comment, 0, len(updates))
@@ -1897,6 +1899,12 @@ func (s *StatusServer) handlePostComments(w http.ResponseWriter, r *http.Request
 				ts = n
 			}
 		}
+		// The identifier attribute is the post id (shared by every
+		// comment); the PMS hash is the unique status id receive
+		// receipts are keyed by.
+		h := u.Hash()
+		var sid zkidentity.ShortID
+		copy(sid[:], h[:])
 		out = append(out, comment{
 			StatusFrom: u.Attributes[rpc.RMPStatusFrom],
 			FromNick:   u.Attributes[rpc.RMPFromNick],
@@ -1904,6 +1912,7 @@ func (s *StatusServer) handlePostComments(w http.ResponseWriter, r *http.Request
 			Parent:     u.Attributes[rpc.RMPParent],
 			Timestamp:  ts,
 			Identifier: u.Attributes[rpc.RMPIdentifier],
+			StatusID:   sid.String(),
 		})
 	}
 	// Merge in own comments sent to the author but not yet broadcast back.
@@ -2164,6 +2173,74 @@ func (s *StatusServer) handlePostReceiveReceipts(w http.ResponseWriter, r *http.
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(struct {
 		Receipts []receipt `json:"receipts"`
+	}{Receipts: out})
+}
+
+// handlePostCommentReceiveReceipts lists the receive receipts recorded for
+// the comments on one of the local user's own posts, grouped by the
+// comment's status id (the PMS hash, matching the status_id field of
+// /posts/comments). Comment receipts are recorded on the post author's node
+// because it relays the comments, so other users' posts return empty.
+func (s *StatusServer) handlePostCommentReceiveReceipts(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	c := s.currentClient()
+	if c == nil {
+		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
+		return
+	}
+	pidStr := strings.TrimSpace(r.URL.Query().Get("pid"))
+	if pidStr == "" {
+		http.Error(w, "pid query param is required", http.StatusBadRequest)
+		return
+	}
+	var pid zkidentity.ShortID
+	if err := pid.FromString(pidStr); err != nil {
+		http.Error(w, "invalid pid: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	updates, err := c.ListPostStatusUpdates(c.PublicID(), pid)
+	if err != nil {
+		http.Error(w, "list status updates: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	type receipt struct {
+		User       string `json:"user"`
+		Nick       string `json:"nick"`
+		ServerTime int64  `json:"server_time"`
+		ClientTime int64  `json:"client_time"`
+	}
+	out := make(map[string][]receipt)
+	for _, u := range updates {
+		if u.Attributes[rpc.RMPSComment] == "" {
+			continue
+		}
+		h := u.Hash()
+		var sid zkidentity.ShortID
+		copy(sid[:], h[:])
+		rrs, err := c.ListPostCommentReceiveReceipts(pid, sid)
+		if err != nil || len(rrs) == 0 {
+			continue
+		}
+		list := make([]receipt, 0, len(rrs))
+		for _, rr := range rrs {
+			if rr == nil {
+				continue
+			}
+			list = append(list, receipt{
+				User:       rr.User.String(),
+				Nick:       c.UserLogNick(rr.User),
+				ServerTime: rr.ServerTime,
+				ClientTime: rr.ClientTime,
+			})
+		}
+		out[sid.String()] = list
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(struct {
+		Receipts map[string][]receipt `json:"receipts"`
 	}{Receipts: out})
 }
 
