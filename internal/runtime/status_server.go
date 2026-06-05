@@ -147,6 +147,7 @@ func (s *StatusServer) Run(ctx context.Context) error {
 	mux.HandleFunc("/posts/heart", s.handlePostHeart)
 	mux.HandleFunc("/posts/receivereceipts", s.handlePostReceiveReceipts)
 	mux.HandleFunc("/posts/comment-receivereceipts", s.handlePostCommentReceiveReceipts)
+	mux.HandleFunc("/posts/relay", s.handlePostRelay)
 	mux.HandleFunc("/posts/new", s.handlePostsNew)
 	mux.HandleFunc("/shared-files", s.handleSharedFiles)
 	mux.HandleFunc("/shared-files/add", s.handleSharedFileAdd)
@@ -2178,6 +2179,55 @@ func (s *StatusServer) handlePostReceiveReceipts(w http.ResponseWriter, r *http.
 	}{Receipts: out})
 }
 
+// handlePostRelay relays a known post: to a single user when to_uid is set
+// (RelayPost), otherwise to all of the local client's post subscribers
+// (RelayPostToSubscribers). Body: {uid (post author), pid, to_uid?}.
+func (s *StatusServer) handlePostRelay(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	c := s.currentClient()
+	if c == nil {
+		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
+		return
+	}
+	var req struct {
+		UID   string `json:"uid"`
+		PID   string `json:"pid"`
+		ToUID string `json:"to_uid"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	uid, ok := parseUIDHex(w, "uid", req.UID)
+	if !ok {
+		return
+	}
+	var pid zkidentity.ShortID
+	if err := pid.FromString(req.PID); err != nil {
+		http.Error(w, "invalid pid: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.ToUID) != "" {
+		toUID, ok := parseUIDHex(w, "to_uid", req.ToUID)
+		if !ok {
+			return
+		}
+		if err := c.RelayPost(uid, pid, toUID); err != nil {
+			http.Error(w, "relay post: "+err.Error(), http.StatusBadGateway)
+			return
+		}
+	} else {
+		if err := c.RelayPostToSubscribers(uid, pid); err != nil {
+			http.Error(w, "relay post to subscribers: "+err.Error(), http.StatusBadGateway)
+			return
+		}
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // handlePostCommentReceiveReceipts lists the receive receipts recorded for
 // the comments on one of the local user's own posts, grouped by the
 // comment's status id (the PMS hash, matching the status_id field of
@@ -3068,15 +3118,28 @@ func (s *StatusServer) handleStatsPosts(w http.ResponseWriter, r *http.Request) 
 	}
 	subs, _ := c.ListPostSubscriptions()
 	subscribers, _ := c.ListPostSubscribers()
+	type subscriberRow struct {
+		UID  string `json:"uid"`
+		Nick string `json:"nick"`
+	}
+	subscriberRows := make([]subscriberRow, 0, len(subscribers))
+	for _, uid := range subscribers {
+		subscriberRows = append(subscriberRows, subscriberRow{
+			UID:  uid.String(),
+			Nick: c.UserLogNick(uid),
+		})
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(struct {
-		Authored         []authored `json:"authored"`
-		SubscribersCount int        `json:"subscribers_count"`
-		SubscriptionsCnt int        `json:"subscriptions_count"`
+		Authored         []authored      `json:"authored"`
+		SubscribersCount int             `json:"subscribers_count"`
+		SubscriptionsCnt int             `json:"subscriptions_count"`
+		Subscribers      []subscriberRow `json:"subscribers"`
 	}{
 		Authored:         out,
 		SubscribersCount: len(subscribers),
 		SubscriptionsCnt: len(subs),
+		Subscribers:      subscriberRows,
 	})
 }
