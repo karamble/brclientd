@@ -62,6 +62,12 @@ type Config struct {
 	StoreShipCharge float64
 }
 
+// ErrRestartRequested is returned by Run when a settings change needs the
+// daemon to restart: client.Config values are fixed at client construction,
+// so the process exits cleanly and the container supervisor relaunches it
+// with the persisted settings.
+var ErrRestartRequested = errors.New("restart requested for settings change")
+
 // Run brings up the /status HTTP server and clientrpc.VersionService
 // immediately, polls dcrlnd until its wallet is unlocked, then starts BR
 // client.Run, conditionally serves the pre-setup endpoint while
@@ -77,6 +83,10 @@ func Run(ctx context.Context, cfg Config) error {
 	notifs := newNotifBus()
 	audioRouter := NewRTDTAudioRouter(cfg.LogFn("RTAU"))
 	reinvites := newGCReinviteTracker()
+	unrepl := newUnreplTracker()
+	brSettings := newBRSettingsStore(cfg.DataDir)
+	effectiveSRR := brSettings.sendReceiveReceipts()
+	restartCh := make(chan struct{})
 
 	g, gctx := errgroup.WithContext(ctx)
 
@@ -87,21 +97,25 @@ func Run(ctx context.Context, cfg Config) error {
 	// 7676 in the no-identity case and would conflict with an early
 	// clientrpc bind.
 	statusSrv := &StatusServer{
-		Log:         cfg.LogFn("STAT"),
-		Certs:       cfg.Certs,
-		Listen:      cfg.StatusListen,
-		Tracker:     tracker,
-		DB:          cfg.DB,
-		UploadDir:   cfg.UploadDir,
-		MsgsRoot:    cfg.MsgsRoot,
-		EmbedsRoot:  cfg.EmbedsRoot,
-		Notifs:      notifs,
-		AudioRouter: audioRouter,
-		Reinvites:   reinvites,
-		PagesDir:    cfg.PagesDir,
-		DataDir:     cfg.DataDir,
-		AppName:     cfg.AppName,
-		AppVersion:  cfg.AppVersion,
+		Log:          cfg.LogFn("STAT"),
+		Certs:        cfg.Certs,
+		Listen:       cfg.StatusListen,
+		Tracker:      tracker,
+		DB:           cfg.DB,
+		UploadDir:    cfg.UploadDir,
+		MsgsRoot:     cfg.MsgsRoot,
+		EmbedsRoot:   cfg.EmbedsRoot,
+		Notifs:       notifs,
+		AudioRouter:  audioRouter,
+		Reinvites:    reinvites,
+		Unrepl:       unrepl,
+		Settings:     brSettings,
+		SRREffective: effectiveSRR,
+		RestartCh:    restartCh,
+		PagesDir:     cfg.PagesDir,
+		DataDir:      cfg.DataDir,
+		AppName:      cfg.AppName,
+		AppVersion:   cfg.AppVersion,
 	}
 	g.Go(func() error { return statusSrv.Run(gctx) })
 
@@ -130,17 +144,19 @@ func Run(ctx context.Context, cfg Config) error {
 	storeProv := &switchableProvider{}
 
 	c, err := startBRClient(BRClientCfg{
-		DB:              cfg.DB,
-		DcrlndPay:       dcrlndPay,
-		BRServer:        cfg.BRServer,
-		SeederCachePath: cfg.SeederCachePath,
-		Tracker:         tracker,
-		Notifs:          notifs,
-		AudioRouter:     audioRouter,
-		Reinvites:       reinvites,
-		LogFn:           cfg.LogFn,
-		IdentityChan:    identityChan,
-		ResProvider:     storeProv,
+		DB:                  cfg.DB,
+		DcrlndPay:           dcrlndPay,
+		BRServer:            cfg.BRServer,
+		SeederCachePath:     cfg.SeederCachePath,
+		Tracker:             tracker,
+		Notifs:              notifs,
+		AudioRouter:         audioRouter,
+		Reinvites:           reinvites,
+		Unrepl:              unrepl,
+		SendReceiveReceipts: effectiveSRR,
+		LogFn:               cfg.LogFn,
+		IdentityChan:        identityChan,
+		ResProvider:         storeProv,
 	})
 	if err != nil {
 		return err

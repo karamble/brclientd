@@ -113,6 +113,10 @@ func run(args []string) error {
 		brlog.BRCD.Infof("Restore staged; exiting for supervisor relaunch")
 		return nil
 	}
+	if errors.Is(err, runtime.ErrRestartRequested) {
+		brlog.BRCD.Infof("Settings change; exiting for supervisor relaunch")
+		return nil
+	}
 	if err != nil && !errors.Is(err, context.Canceled) {
 		return err
 	}

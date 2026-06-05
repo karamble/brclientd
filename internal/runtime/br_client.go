@@ -35,8 +35,13 @@ type BRClientCfg struct {
 	Notifs          *notifBus
 	AudioRouter     *RTDTAudioRouter
 	Reinvites       *gcReinviteTracker
+	Unrepl          *unreplTracker
 	LogFn           func(subsys string) slog.Logger
 	IdentityChan    <-chan *zkidentity.FullIdentity
+
+	// SendReceiveReceipts forwards into client.Config.SendReceiveReceipts:
+	// send receive receipts to post authors for received posts and comments.
+	SendReceiveReceipts bool
 	// ResProvider is the resource provider bound at the client's root. The
 	// caller passes a switchableProvider the store controller flips between
 	// filesystem-hosted pages and a simplestore at runtime.
@@ -56,6 +61,10 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 	// the BR server is briefly unreachable.
 	netDialer := &net.Dialer{}
 	dialer := cachedSeederDialer(cfg.BRServer, cfg.LogFn("CONN"), netDialer.DialContext, cfg.SeederCachePath)
+
+	// Assigned after client.New below; notification callbacks only fire once
+	// the client runs, so closures capturing brc see the live client.
+	var brc *client.Client
 
 	ntfns := client.NewNotificationManager()
 	ntfns.Register(client.OnServerSessionChangedNtfn(func(connected bool, policy clientintf.ServerPolicy) {
@@ -267,6 +276,17 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 		commentBody := pms.Attributes[rpc.RMPSComment]
 		heartVal := pms.Attributes[rpc.RMPSHeart]
 		if commentBody != "" {
+			// One of our own comments replicating back: the author has
+			// broadcast it, so it is no longer unreplicated. The tracker
+			// key is the post author; for our own posts ru is nil and the
+			// author is the local identity.
+			if cfg.Unrepl != nil && brc != nil && statusFrom == brc.PublicID() {
+				postFrom := author
+				if postFrom == "" {
+					postFrom = brc.PublicID().String()
+				}
+				cfg.Unrepl.remove(postFrom, pid.String(), commentBody, pms.Attributes[rpc.RMPParent])
+			}
 			nlog.Infof("Received comment on post %s from %s", pid, statusFrom)
 			var ts int64
 			if tsStr := pms.Attributes[rpc.RMPTimestamp]; tsStr != "" {
@@ -941,6 +961,7 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 		// PKXActionFetchPost. Matches brclient's default (autosubposts=1)
 		// and bruig's typical config.
 		AutoSubscribeToPosts: true,
+		SendReceiveReceipts:  cfg.SendReceiveReceipts,
 
 		LocalIDIniter: func(ctx context.Context) (*zkidentity.FullIdentity, error) {
 			select {
@@ -976,6 +997,7 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("client.New: %w", err)
 	}
+	brc = c
 	return c, nil
 }
 

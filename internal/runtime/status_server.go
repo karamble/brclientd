@@ -47,8 +47,19 @@ type StatusServer struct {
 	Notifs      *notifBus
 	AudioRouter *RTDTAudioRouter
 	Reinvites   *gcReinviteTracker
+	Unrepl      *unreplTracker
 	AppName     string
 	AppVersion  string
+
+	// Settings persists dashboard-changeable daemon settings; SRREffective is
+	// the send-receive-receipts value this process booted with (fixed at BR
+	// client construction). RestartCh is closed by requestRestart to make Run
+	// return ErrRestartRequested so the supervisor relaunches the daemon with
+	// the persisted settings.
+	Settings     *brSettingsStore
+	SRREffective bool
+	RestartCh    chan struct{}
+	restartOnce  sync.Once
 
 	clientMu sync.RWMutex
 	client   *client.Client
@@ -96,6 +107,10 @@ func (s *StatusServer) currentClient() *client.Client {
 	return s.client
 }
 
+func (s *StatusServer) requestRestart() {
+	s.restartOnce.Do(func() { close(s.RestartCh) })
+}
+
 // Run blocks until ctx is cancelled or the server fails.
 func (s *StatusServer) Run(ctx context.Context) error {
 	tlsCfg, err := s.Certs.LoadServerTLSConfig()
@@ -128,6 +143,7 @@ func (s *StatusServer) Run(ctx context.Context) error {
 	mux.HandleFunc("/posts/comment", s.handlePostComment)
 	mux.HandleFunc("/posts/hearts", s.handlePostHearts)
 	mux.HandleFunc("/posts/heart", s.handlePostHeart)
+	mux.HandleFunc("/posts/receivereceipts", s.handlePostReceiveReceipts)
 	mux.HandleFunc("/posts/new", s.handlePostsNew)
 	mux.HandleFunc("/shared-files", s.handleSharedFiles)
 	mux.HandleFunc("/shared-files/add", s.handleSharedFileAdd)
@@ -174,6 +190,7 @@ func (s *StatusServer) Run(ctx context.Context) error {
 	mux.HandleFunc("/pages/local/delete", s.handlePagesLocalDelete)
 	mux.HandleFunc("/backup", s.handleBackup)
 	mux.HandleFunc("/connection", s.handleConnection)
+	mux.HandleFunc("/settings/receivereceipts", s.handleReceiveReceipts)
 	mux.HandleFunc("/filters", s.handleFilters)
 	mux.HandleFunc("/filters/delete", s.handleDeleteFilter)
 	mux.HandleFunc("/posts/subscribe-all", s.handleSubscribeAllPosts)
@@ -201,6 +218,13 @@ func (s *StatusServer) Run(ctx context.Context) error {
 		defer cancel()
 		srv.Shutdown(shutdown)
 		return ctx.Err()
+	case <-s.RestartCh:
+		// Graceful shutdown drains the in-flight POST that already wrote
+		// its response before signaling the restart.
+		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		srv.Shutdown(shutdown)
+		return ErrRestartRequested
 	case err := <-serveErr:
 		return err
 	}
@@ -1844,12 +1868,13 @@ func (s *StatusServer) handlePostComments(w http.ResponseWriter, r *http.Request
 		return
 	}
 	type comment struct {
-		StatusFrom string `json:"status_from"`
-		FromNick   string `json:"from_nick"`
-		Comment    string `json:"comment"`
-		Parent     string `json:"parent,omitempty"`
-		Timestamp  int64  `json:"timestamp"`
-		Identifier string `json:"identifier,omitempty"`
+		StatusFrom   string `json:"status_from"`
+		FromNick     string `json:"from_nick"`
+		Comment      string `json:"comment"`
+		Parent       string `json:"parent,omitempty"`
+		Timestamp    int64  `json:"timestamp"`
+		Identifier   string `json:"identifier,omitempty"`
+		Unreplicated bool   `json:"unreplicated,omitempty"`
 	}
 	out := make([]comment, 0, len(updates))
 	for _, u := range updates {
@@ -1871,6 +1896,33 @@ func (s *StatusServer) handlePostComments(w http.ResponseWriter, r *http.Request
 			Timestamp:  ts,
 			Identifier: u.Attributes[rpc.RMPIdentifier],
 		})
+	}
+	// Merge in own comments sent to the author but not yet broadcast back.
+	// Dedupe by text + parent guards the race where the replicated copy
+	// already landed but the tracker entry was not yet removed.
+	if s.Unrepl != nil {
+		myID := c.PublicID().String()
+		myNick := c.LocalNick()
+		for _, e := range s.Unrepl.list(uid.String(), pid.String()) {
+			replicated := false
+			for _, o := range out {
+				if o.StatusFrom == myID && o.Comment == e.Comment && o.Parent == e.Parent {
+					replicated = true
+					break
+				}
+			}
+			if replicated {
+				continue
+			}
+			out = append(out, comment{
+				StatusFrom:   myID,
+				FromNick:     myNick,
+				Comment:      e.Comment,
+				Parent:       e.Parent,
+				Timestamp:    e.Timestamp,
+				Unreplicated: true,
+			})
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(struct {
@@ -1928,6 +1980,18 @@ func (s *StatusServer) handlePostComment(w http.ResponseWriter, r *http.Request)
 	if err != nil {
 		http.Error(w, "comment post: "+err.Error(), http.StatusBadGateway)
 		return
+	}
+	// Comments on the local user's own posts are added to the post directly
+	// by the client (no relay round-trip), so only track comments to remote
+	// authors. Normalized ShortID strings so removal in the post-status ntfn
+	// (which compares against PublicID().String()/pid.String()) and the
+	// merge in handlePostComments match exactly.
+	if s.Unrepl != nil && uid != c.PublicID() {
+		parentStr := ""
+		if parent != nil {
+			parentStr = parent.String()
+		}
+		s.Unrepl.add(uid.String(), pid.String(), req.Comment, parentStr, time.Now().Unix())
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(struct {
@@ -2038,6 +2102,60 @@ func (s *StatusServer) handlePostHeart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handlePostReceiveReceipts lists the receive receipts recorded for one of
+// the local user's own posts (which subscribers acknowledged receiving it).
+// ListPostReceiveReceipts is keyed on the local identity, so posts authored
+// by others naturally return an empty list. Timestamps are Unix milliseconds
+// (clientdb.ReceiveReceipt).
+func (s *StatusServer) handlePostReceiveReceipts(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	c := s.currentClient()
+	if c == nil {
+		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
+		return
+	}
+	pidStr := strings.TrimSpace(r.URL.Query().Get("pid"))
+	if pidStr == "" {
+		http.Error(w, "pid query param is required", http.StatusBadRequest)
+		return
+	}
+	var pid zkidentity.ShortID
+	if err := pid.FromString(pidStr); err != nil {
+		http.Error(w, "invalid pid: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	rrs, err := c.ListPostReceiveReceipts(pid)
+	if err != nil {
+		http.Error(w, "list receive receipts: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	type receipt struct {
+		User       string `json:"user"`
+		Nick       string `json:"nick"`
+		ServerTime int64  `json:"server_time"`
+		ClientTime int64  `json:"client_time"`
+	}
+	out := make([]receipt, 0, len(rrs))
+	for _, rr := range rrs {
+		if rr == nil {
+			continue
+		}
+		out = append(out, receipt{
+			User:       rr.User.String(),
+			Nick:       c.UserLogNick(rr.User),
+			ServerTime: rr.ServerTime,
+			ClientTime: rr.ClientTime,
+		})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(struct {
+		Receipts []receipt `json:"receipts"`
+	}{Receipts: out})
 }
 
 // handleNotifications streams JSONL events from the in-process notif bus to
