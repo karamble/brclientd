@@ -80,10 +80,67 @@ func (s *StatusServer) handleRTDT(w http.ResponseWriter, r *http.Request) {
 			s.handleRTDTRotateCookies(w, r, rv)
 		case "audio":
 			s.handleRTDTAudioWS(w, r, rv)
+		case "messages":
+			s.handleRTDTMessages(w, r, rv)
+		case "chat":
+			s.handleRTDTChat(w, r, rv)
 		default:
 			http.NotFound(w, r)
 		}
 	}
+}
+
+// handleRTDTMessages returns the chat messages tracked for a live session
+// (TrackRTDTChatMessages is enabled in the client config; the buffer lives
+// only for the session's lifetime).
+func (s *StatusServer) handleRTDTMessages(w http.ResponseWriter, r *http.Request, rv zkidentity.ShortID) {
+	c := s.requireRTDTClient(w, r, http.MethodGet)
+	if c == nil {
+		return
+	}
+	msgs := c.GetRTDTMessages(rv)
+	type chatMsg struct {
+		PeerID    uint32 `json:"peer_id"`
+		Message   string `json:"message"`
+		Timestamp int64  `json:"timestamp"`
+	}
+	out := make([]chatMsg, 0, len(msgs))
+	for _, m := range msgs {
+		out = append(out, chatMsg{
+			PeerID:    uint32(m.SourceID),
+			Message:   m.Message,
+			Timestamp: m.Timestamp,
+		})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(struct {
+		Messages []chatMsg `json:"messages"`
+	}{Messages: out})
+}
+
+// handleRTDTChat sends a text message into a live session. Body: {message}.
+func (s *StatusServer) handleRTDTChat(w http.ResponseWriter, r *http.Request, rv zkidentity.ShortID) {
+	c := s.requireRTDTClient(w, r, http.MethodPost)
+	if c == nil {
+		return
+	}
+	var req struct {
+		Message string `json:"message"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	req.Message = strings.TrimSpace(req.Message)
+	if req.Message == "" {
+		http.Error(w, "message is required", http.StatusBadRequest)
+		return
+	}
+	if err := c.SendRTDTChatMsg(rv, req.Message); err != nil {
+		http.Error(w, "send chat: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // requireRTDTClient is the standard "BR client up?" guard plus method check.

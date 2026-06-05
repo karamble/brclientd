@@ -120,6 +120,102 @@ func (s *StatusServer) handleReceiveReceipts(w http.ResponseWriter, r *http.Requ
 	}
 }
 
+// handleKXSearches lists the outstanding KX searches (looking for a post
+// author across the network via its commenters).
+func (s *StatusServer) handleKXSearches(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	c := s.currentClient()
+	if c == nil {
+		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
+		return
+	}
+	targets, err := c.ListKXSearches()
+	if err != nil {
+		http.Error(w, "list kx searches: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	type searchRow struct {
+		Target string `json:"target"`
+		Nick   string `json:"nick"`
+	}
+	out := make([]searchRow, 0, len(targets))
+	for _, t := range targets {
+		out = append(out, searchRow{Target: t.String(), Nick: c.UserLogNick(t)})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(struct {
+		Searches []searchRow `json:"searches"`
+	}{Searches: out})
+}
+
+// handleMediateIDs lists (GET) or cancels (POST /cancel via body
+// {mediator, target}) the in-flight mediated introduction requests.
+func (s *StatusServer) handleMediateIDs(w http.ResponseWriter, r *http.Request) {
+	c := s.currentClient()
+	if c == nil {
+		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		reqs, err := c.ListMediateIDs()
+		if err != nil {
+			http.Error(w, "list mediate ids: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		type midRow struct {
+			Mediator     string    `json:"mediator"`
+			MediatorNick string    `json:"mediator_nick"`
+			Target       string    `json:"target"`
+			TargetNick   string    `json:"target_nick"`
+			Date         time.Time `json:"date"`
+			Manual       bool      `json:"manual"`
+		}
+		out := make([]midRow, 0, len(reqs))
+		for _, m := range reqs {
+			out = append(out, midRow{
+				Mediator:     m.Mediator.String(),
+				MediatorNick: c.UserLogNick(m.Mediator),
+				Target:       m.Target.String(),
+				TargetNick:   c.UserLogNick(m.Target),
+				Date:         m.Date,
+				Manual:       m.Manual,
+			})
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(struct {
+			MediateIDs []midRow `json:"mediate_ids"`
+		}{MediateIDs: out})
+	case http.MethodPost:
+		var req struct {
+			Mediator string `json:"mediator"`
+			Target   string `json:"target"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		mediator, ok := parseUIDHex(w, "mediator", req.Mediator)
+		if !ok {
+			return
+		}
+		target, ok := parseUIDHex(w, "target", req.Target)
+		if !ok {
+			return
+		}
+		if err := c.CancelMediateID(mediator, target); err != nil {
+			http.Error(w, "cancel mediate id: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
 // filterOut is the wire shape of a content filter. clientdb.ContentFilter
 // carries no json tags and scopes via pointer ShortIDs, so an explicit DTO
 // keeps the API snake_case with hex scope ids ("" = unscoped).

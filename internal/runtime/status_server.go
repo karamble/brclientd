@@ -202,6 +202,8 @@ func (s *StatusServer) Run(ctx context.Context) error {
 	mux.HandleFunc("/filters/delete", s.handleDeleteFilter)
 	mux.HandleFunc("/posts/subscribe-all", s.handleSubscribeAllPosts)
 	mux.HandleFunc("/kx/list", s.handleKXList)
+	mux.HandleFunc("/kx/searches", s.handleKXSearches)
+	mux.HandleFunc("/kx/mediateids", s.handleMediateIDs)
 
 	srv := &http.Server{
 		Addr:              s.Listen,

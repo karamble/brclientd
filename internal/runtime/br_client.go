@@ -1307,6 +1307,24 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 		AutoSubscribeToPosts: true,
 		SendReceiveReceipts:  cfg.SendReceiveReceipts,
 
+		// Upstream parity (brclient defaults): compressed RMs cost less
+		// in relay push fees, periodic handshakes keep ratchets fresh,
+		// and contacts idle past the window are unsubscribed (each
+		// removal leaves an idle-unsubscribing trace in their thread).
+		// The ignore list mirrors brclient's well-known bots.
+		ReconnectDelay:              5 * time.Second,
+		CompressLevel:               4,
+		AutoHandshakeInterval:       21 * 24 * time.Hour,
+		AutoRemoveIdleUsersInterval: 60 * 24 * time.Hour,
+		AutoRemoveIdleUsersIgnoreList: []string{
+			"86abd31f2141b274196d481edd061a00ab7a56b61a31656775c8a590d612b966", // Oprah
+			"ad716557157c1f191d8b5f8c6757ea41af49de27dc619fc87f337ca85be325ee", // GC bot
+		},
+
+		// Without this GetRTDTMessages always returns empty and in-call
+		// chat history cannot be served.
+		TrackRTDTChatMessages: true,
+
 		// The cost advertised in a post embed is advisory; the host invoices
 		// from the cost stored on its share, which only arrives with the
 		// file metadata here. Pay only up to the cap the caller approved
