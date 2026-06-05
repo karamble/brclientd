@@ -378,6 +378,153 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 		}
 	}))
 
+	// OnLocalClientOfflineTooLong fires after connecting when the client
+	// was offline beyond the server's retention window: RVs pushed to it
+	// meanwhile may have expired server-side, i.e. messages can be
+	// permanently lost. Without this hook the condition is invisible.
+	ntfns.Register(client.OnLocalClientOfflineTooLong(func(lastConn time.Time) {
+		detail := fmt.Sprintf("This client was offline since %s, longer than the server's message retention window; messages sent to it meanwhile may have been dropped.",
+			lastConn.Format(time.RFC1123))
+		nlog.Warnf("%s", detail)
+		if cfg.Notes != nil {
+			cfg.Notes.add("warn", "Offline too long", detail, "")
+		}
+		if cfg.Notifs != nil {
+			cfg.Notifs.Publish(NotifEvent{
+				Type: "offline-too-long",
+				Payload: map[string]any{
+					"since": lastConn.Unix(),
+					"text":  detail,
+				},
+			})
+		}
+	}))
+
+	// OnServerUnwelcomeError fires when the relay rejects the connection
+	// in a way that hints this client version must be upgraded.
+	ntfns.Register(client.OnServerUnwelcomeError(func(err error) {
+		detail := fmt.Sprintf("The relay server rejected this client: %v. A daemon upgrade may be required.", err)
+		nlog.Errorf("%s", detail)
+		if cfg.Notes != nil {
+			cfg.Notes.add("error", "Server rejected client", detail, "")
+		}
+		if cfg.Notifs != nil {
+			cfg.Notifs.Publish(NotifEvent{
+				Type: "server-unwelcome",
+				Payload: map[string]any{
+					"error": err.Error(),
+					"text":  detail,
+				},
+			})
+		}
+	}))
+
+	// OnRemoteSubscriptionErrorNtfn fires when a subscribe/unsubscribe to
+	// a remote user's posts errors; without it the Feed UI shows the
+	// attempt as if it succeeded.
+	ntfns.Register(client.OnRemoteSubscriptionErrorNtfn(func(ru *client.RemoteUser, wasSubscribing bool, errMsg string) {
+		uid := ru.ID().String()
+		nick := ru.Nick()
+		verb := "unsubscribe from"
+		if wasSubscribing {
+			verb = "subscribe to"
+		}
+		detail := fmt.Sprintf("Could not %s %s's posts: %s", verb, nick, errMsg)
+		nlog.Warnf("%s", detail)
+		if cfg.Notes != nil {
+			cfg.Notes.add("warn", "Post subscription failed", detail, uid)
+		}
+		logErr := cfg.DB.Update(context.Background(), func(tx clientdb.ReadWriteTx) error {
+			_, err := cfg.DB.LogPM(tx, ru.ID(), true, "", detail, time.Now())
+			return err
+		})
+		if logErr != nil {
+			nlog.Warnf("Log subscription error to PM history: %v", logErr)
+		}
+		if cfg.Notifs != nil {
+			cfg.Notifs.Publish(NotifEvent{
+				Type: "posts-subscribe-error",
+				Payload: map[string]any{
+					"uid":             uid,
+					"nick":            nick,
+					"was_subscribing": wasSubscribing,
+					"error":           errMsg,
+					"text":            detail,
+				},
+			})
+		}
+	}))
+
+	// OnBlockNtfn fires when a contact asked to be blocked: the library
+	// removes them and they cannot be messaged anymore. No PM log line
+	// since the contact (and their log) is being torn down.
+	ntfns.Register(client.OnBlockNtfn(func(ru *client.RemoteUser) {
+		uid := ru.ID().String()
+		nick := ru.Nick()
+		detail := fmt.Sprintf("%s has blocked this client; messages can no longer be exchanged with them.", nick)
+		nlog.Warnf("%s", detail)
+		if cfg.Notes != nil {
+			cfg.Notes.add("warn", "Blocked by "+nick, detail, uid)
+		}
+		if cfg.Notifs != nil {
+			cfg.Notifs.Publish(NotifEvent{
+				Type: "blocked-by-user",
+				Payload: map[string]any{
+					"uid":  uid,
+					"nick": nick,
+					"text": detail,
+				},
+			})
+		}
+	}))
+
+	// OnProfileUpdated fires when a contact changes profile fields (e.g.
+	// avatar); the dashboard refreshes its cached contact data live.
+	ntfns.Register(client.OnProfileUpdated(func(ru *client.RemoteUser, _ *clientdb.AddressBookEntry, fields []client.ProfileUpdateField) {
+		fieldStrs := make([]string, len(fields))
+		for i, f := range fields {
+			fieldStrs[i] = string(f)
+		}
+		if cfg.Notifs != nil {
+			cfg.Notifs.Publish(NotifEvent{
+				Type: "profile-updated",
+				Payload: map[string]any{
+					"uid":    ru.ID().String(),
+					"nick":   ru.Nick(),
+					"fields": fieldStrs,
+				},
+			})
+		}
+	}))
+
+	// OnUnsubscribingIdleRemoteClient fires when this client drops an
+	// idle peer's subscriptions (only when AutoRemoveIdleUsers is
+	// configured); leave a trace in that peer's thread.
+	ntfns.Register(client.OnUnsubscribingIdleRemoteClient(func(ru *client.RemoteUser, lastDecTime time.Time) {
+		uid := ru.ID().String()
+		nick := ru.Nick()
+		detail := fmt.Sprintf("%s has been idle since %s; unsubscribing them from posts and GCs.",
+			nick, lastDecTime.Format(time.RFC1123))
+		nlog.Infof("%s", detail)
+		logErr := cfg.DB.Update(context.Background(), func(tx clientdb.ReadWriteTx) error {
+			_, err := cfg.DB.LogPM(tx, ru.ID(), true, "", detail, time.Now())
+			return err
+		})
+		if logErr != nil {
+			nlog.Warnf("Log idle unsubscribe to PM history: %v", logErr)
+		}
+		if cfg.Notifs != nil {
+			cfg.Notifs.Publish(NotifEvent{
+				Type: "idle-unsubscribing",
+				Payload: map[string]any{
+					"uid":  uid,
+					"nick": nick,
+					"text": detail,
+				},
+			})
+		}
+	}))
+
 	// OnPostStatusRcvdNtfn fires when a status update on a post (comment,
 	// heart, etc.) arrives — either ours arriving back via the relay or
 	// someone else's on a post we already know about. We fan it out as

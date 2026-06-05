@@ -41,6 +41,17 @@ type Status struct {
 	ConnectedAt time.Time `json:"connectedAt,omitempty"`
 }
 
+// QueueStats are the BR client's outbound queue lengths and RV sync state,
+// reported by /stats/network; queue buildup is the early sign of relay
+// delivery trouble.
+type QueueStats struct {
+	RMQWaiting  int  `json:"rmq_waiting"`
+	RMQSending  int  `json:"rmq_sending"`
+	SendQItems  int  `json:"sendq_items"`
+	SendQDests  int  `json:"sendq_dests"`
+	RVsUpToDate bool `json:"rvs_up_to_date"`
+}
+
 // Tracker holds the current Status with mutex protection and serves both
 // the BR notification callbacks (writers) and the /status HTTP handler
 // (reader).

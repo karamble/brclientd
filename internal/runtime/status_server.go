@@ -2713,6 +2713,8 @@ func (s *StatusServer) handleStatsNetwork(w http.ResponseWriter, r *http.Request
 		return
 	}
 	status := s.Tracker.Get()
+	rmqWaiting, rmqSending := c.RMQLen()
+	sendqItems, sendqDests := c.SendQueueLen()
 	out := struct {
 		ServerNode      string        `json:"server_node,omitempty"`
 		RecommendedPeer string        `json:"recommended_peer,omitempty"`
@@ -2720,6 +2722,7 @@ func (s *StatusServer) handleStatsNetwork(w http.ResponseWriter, r *http.Request
 		Stage           Stage         `json:"stage"`
 		Policy          policyOut     `json:"policy"`
 		RmqQuantiles    []quantileOut `json:"rmq_quantiles"`
+		Queues          QueueStats    `json:"queues"`
 	}{
 		ServerNode:      status.ServerNode,
 		RecommendedPeer: status.RecommendedPeer,
@@ -2727,6 +2730,13 @@ func (s *StatusServer) handleStatsNetwork(w http.ResponseWriter, r *http.Request
 		Stage:           status.Stage,
 		Policy:          policyFromSession(c),
 		RmqQuantiles:    toQuantileOut(c.RMQTimingStat()),
+		Queues: QueueStats{
+			RMQWaiting:  rmqWaiting,
+			RMQSending:  rmqSending,
+			SendQItems:  sendqItems,
+			SendQDests:  sendqDests,
+			RVsUpToDate: c.RVsUpToDate(),
+		},
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(out)
