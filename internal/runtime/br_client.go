@@ -256,6 +256,14 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 		if cfg.Notifs == nil {
 			return
 		}
+		// A status on the LOCAL user's own post round-trips back with a nil
+		// remote user (there is no RemoteUser for ourselves); guard the deref
+		// so it cannot panic the daemon. pid and status_from still identify it.
+		var author, authorNick string
+		if ru != nil {
+			author = ru.ID().String()
+			authorNick = ru.Nick()
+		}
 		commentBody := pms.Attributes[rpc.RMPSComment]
 		heartVal := pms.Attributes[rpc.RMPSHeart]
 		if commentBody != "" {
@@ -269,8 +277,8 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 			cfg.Notifs.Publish(NotifEvent{
 				Type: "post-status-received",
 				Payload: map[string]any{
-					"author":      ru.ID().String(),
-					"author_nick": ru.Nick(),
+					"author":      author,
+					"author_nick": authorNick,
 					"pid":         pid.String(),
 					"status_from": statusFrom.String(),
 					"from_nick":   pms.Attributes[rpc.RMPFromNick],
@@ -287,8 +295,8 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 			cfg.Notifs.Publish(NotifEvent{
 				Type: "post-heart-received",
 				Payload: map[string]any{
-					"author":      ru.ID().String(),
-					"author_nick": ru.Nick(),
+					"author":      author,
+					"author_nick": authorNick,
 					"pid":         pid.String(),
 					"status_from": statusFrom.String(),
 					"value":       heartVal,
