@@ -1933,7 +1933,8 @@ func (s *StatusServer) handlePostComments(w http.ResponseWriter, r *http.Request
 		}
 		var ts int64
 		if tsStr := u.Attributes[rpc.RMPTimestamp]; tsStr != "" {
-			if n, err := strconv.ParseInt(tsStr, 10, 64); err == nil {
+			// Hex per BR's status-update writer (client_posts.go).
+			if n, err := strconv.ParseInt(tsStr, 16, 64); err == nil {
 				ts = n
 			}
 		}

@@ -330,7 +330,10 @@ func aggregateComments(updates []rpc.PostMetadataStatus, myID, myNick string,
 		}
 		var ts int64
 		if tsStr := u.Attributes[rpc.RMPTimestamp]; tsStr != "" {
-			if n, err := strconv.ParseInt(tsStr, 10, 64); err == nil {
+			// Status updates carry hex timestamps (BR client_posts.go
+			// writes FormatInt(.., 16)); a base-10 parse turns all-digit
+			// hex values into dates around 1972.
+			if n, err := strconv.ParseInt(tsStr, 16, 64); err == nil {
 				ts = n
 			}
 		}

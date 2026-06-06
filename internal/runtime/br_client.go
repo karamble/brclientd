@@ -633,7 +633,8 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 			nlog.Infof("Received comment on post %s from %s", pid, statusFrom)
 			var ts int64
 			if tsStr := pms.Attributes[rpc.RMPTimestamp]; tsStr != "" {
-				if n, err := strconv.ParseInt(tsStr, 10, 64); err == nil {
+				// Hex per BR's status-update writer (client_posts.go).
+				if n, err := strconv.ParseInt(tsStr, 16, 64); err == nil {
 					ts = n
 				}
 			}
