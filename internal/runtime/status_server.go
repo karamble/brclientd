@@ -141,6 +141,7 @@ func (s *StatusServer) Run(ctx context.Context) error {
 	mux.HandleFunc("/contacts/fetch-post", s.handleFetchPost)
 	mux.HandleFunc("/posts/feed", s.handlePostsFeed)
 	mux.HandleFunc("/posts/body", s.handlePostBody)
+	mux.HandleFunc("/posts/embed-data", s.handlePostsEmbedData)
 	mux.HandleFunc("/posts/comments", s.handlePostComments)
 	mux.HandleFunc("/posts/comment", s.handlePostComment)
 	mux.HandleFunc("/posts/hearts", s.handlePostHearts)
@@ -835,6 +836,12 @@ func (s *StatusServer) handleFetchPost(w http.ResponseWriter, r *http.Request) {
 // handlePostsFeed returns the local list of all posts (received from
 // subscribed users + ours). Lightweight summaries only — bodies are
 // fetched on demand via /posts/body.
+// handlePostsFeed returns every post in the local feed enriched with all
+// locally derivable data: clean title/snippet (embed shortcodes stripped),
+// embed metadata (payload bytes served by /posts/embed-data), heart and
+// comment aggregates, relayer attribution and receive-receipt counts for
+// own posts. A post whose content file fails to read degrades to its bare
+// summary instead of failing the whole feed.
 func (s *StatusServer) handlePostsFeed(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -850,18 +857,12 @@ func (s *StatusServer) handlePostsFeed(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "list posts: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	type postSummary struct {
-		ID           string `json:"id"`
-		From         string `json:"from"`
-		AuthorID     string `json:"author_id"`
-		AuthorNick   string `json:"author_nick"`
-		Date         int64  `json:"date"`
-		LastStatusTS int64  `json:"last_status_ts"`
-		Title        string `json:"title"`
-	}
-	out := make([]postSummary, 0, len(posts))
+	myID := c.PublicID()
+	myIDStr := myID.String()
+	myNick := c.LocalNick()
+	out := make([]feedPost, 0, len(posts))
 	for _, p := range posts {
-		out = append(out, postSummary{
+		row := feedPost{
 			ID:           p.ID.String(),
 			From:         p.From.String(),
 			AuthorID:     p.AuthorID.String(),
@@ -869,11 +870,43 @@ func (s *StatusServer) handlePostsFeed(w http.ResponseWriter, r *http.Request) {
 			Date:         p.Date.Unix(),
 			LastStatusTS: p.LastStatusTS.Unix(),
 			Title:        p.Title,
-		})
+		}
+		if p.From != p.AuthorID {
+			row.Relayed = true
+			row.RelayerNick = c.UserLogNick(p.From)
+		}
+		// Posts are keyed by author in clientdb, so reads use AuthorID
+		// even when the post arrived through a relayer (From).
+		if pm, err := c.ReadPost(p.AuthorID, p.ID); err == nil {
+			plain, embeds := stripEmbeds(pm.Attributes[rpc.RMPMain])
+			row.Title = deriveTitle(pm.Attributes, plain)
+			if row.Title == "" {
+				row.Title = fallbackEmbedTitle(embeds)
+			}
+			row.Description = strings.TrimSpace(pm.Attributes[rpc.RMPDescription])
+			row.Snippet, row.HasMore = deriveSnippet(plain, feedSnippetCap)
+			row.Embeds = embeds
+			row.FirstImage = firstImage(embeds)
+		}
+		if updates, err := c.ListPostStatusUpdates(p.AuthorID, p.ID); err == nil {
+			row.HeartsCount, row.HeartedByMe, row.HeartedBy = aggregateHearts(updates, myIDStr)
+			var unrepl []unreplComment
+			if s.Unrepl != nil {
+				unrepl = s.Unrepl.list(row.AuthorID, row.ID)
+			}
+			row.CommentsCount, row.CommenterCount, row.LastCommentTS, row.LastCommentNick =
+				aggregateComments(updates, myIDStr, myNick, unrepl)
+		}
+		if p.AuthorID == myID {
+			if rrs, err := c.ListPostReceiveReceipts(p.ID); err == nil {
+				row.ReceiptCount = len(rrs)
+			}
+		}
+		out = append(out, row)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(struct {
-		Posts []postSummary `json:"posts"`
+		Posts []feedPost `json:"posts"`
 	}{Posts: out})
 }
 
