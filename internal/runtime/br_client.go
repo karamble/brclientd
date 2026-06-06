@@ -832,6 +832,9 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 		if err != nil {
 			nlog.Warnf("Log received tip to PM history: %v", err)
 		}
+		if cfg.Notes != nil {
+			cfg.Notes.add("info", "Tip received", line, senderID.String())
+		}
 		if cfg.Notifs != nil {
 			cfg.Notifs.Publish(NotifEvent{
 				Type: "tip-received",
