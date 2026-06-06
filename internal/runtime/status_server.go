@@ -2057,36 +2057,51 @@ func (s *StatusServer) handlePostHearts(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "list status updates: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	myID := c.PublicID().String()
-	count := 0
-	heartedByMe := false
+	// Updates are time-ordered, so the last RMPSHeart status per user is
+	// their current toggle state (1 adds, 0 removes; rpc.routedrpc.go).
+	type heartState struct {
+		mode string
+		nick string
+	}
+	last := make(map[string]heartState)
+	order := make([]string, 0, len(updates))
 	for _, u := range updates {
 		if u.Attributes == nil {
 			continue
 		}
 		mode, ok := u.Attributes[rpc.RMPSHeart]
-		if !ok {
+		if !ok || (mode != rpc.RMPSHeartYes && mode != rpc.RMPSHeartNo) {
 			continue
 		}
-		switch mode {
-		case rpc.RMPSHeartYes:
-			count++
-		case rpc.RMPSHeartNo:
-			if count > 0 {
-				count--
-			}
-		default:
+		from := u.Attributes[rpc.RMPStatusFrom]
+		if _, seen := last[from]; !seen {
+			order = append(order, from)
+		}
+		last[from] = heartState{mode: mode, nick: u.Attributes[rpc.RMPFromNick]}
+	}
+	type heartRow struct {
+		User string `json:"user"`
+		Nick string `json:"nick"`
+	}
+	myID := c.PublicID().String()
+	hearts := make([]heartRow, 0, len(order))
+	heartedByMe := false
+	for _, from := range order {
+		st := last[from]
+		if st.mode != rpc.RMPSHeartYes {
 			continue
 		}
-		if u.Attributes[rpc.RMPStatusFrom] == myID {
-			heartedByMe = mode == rpc.RMPSHeartYes
+		if from == myID {
+			heartedByMe = true
 		}
+		hearts = append(hearts, heartRow{User: from, Nick: st.nick})
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(struct {
-		Count       int  `json:"count"`
-		HeartedByMe bool `json:"hearted_by_me"`
-	}{Count: count, HeartedByMe: heartedByMe})
+		Count       int        `json:"count"`
+		HeartedByMe bool       `json:"hearted_by_me"`
+		Hearts      []heartRow `json:"hearts"`
+	}{Count: len(hearts), HeartedByMe: heartedByMe, Hearts: hearts})
 }
 
 // handlePostHeart toggles the local identity's heart on a remote post.
