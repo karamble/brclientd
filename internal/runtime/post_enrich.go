@@ -59,6 +59,7 @@ type feedPost struct {
 	AuthorID        string          `json:"author_id"`
 	AuthorNick      string          `json:"author_nick"`
 	Date            int64           `json:"date"`
+	Published       int64           `json:"published,omitempty"`
 	LastStatusTS    int64           `json:"last_status_ts"`
 	Title           string          `json:"title"`
 	Description     string          `json:"description,omitempty"`

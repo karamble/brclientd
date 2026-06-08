@@ -887,6 +887,14 @@ func (s *StatusServer) handlePostsFeed(w http.ResponseWriter, r *http.Request) {
 			row.Snippet, row.HasMore = deriveSnippet(plain, feedSnippetCap)
 			row.Embeds = embeds
 			row.FirstImage = firstImage(embeds)
+			// The author's true publish time rides in the post metadata as a
+			// hex timestamp; Date stays the local ModTime so new activity keeps
+			// bumping posts up the feed.
+			if tsStr := pm.Attributes[rpc.RMPTimestamp]; tsStr != "" {
+				if n, err := strconv.ParseInt(tsStr, 16, 64); err == nil {
+					row.Published = n
+				}
+			}
 		}
 		if updates, err := c.ListPostStatusUpdates(p.AuthorID, p.ID); err == nil {
 			row.HeartsCount, row.HeartedByMe, row.HeartedBy = aggregateHearts(updates, myIDStr)
