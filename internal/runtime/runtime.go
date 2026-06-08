@@ -183,7 +183,7 @@ func Run(ctx context.Context, cfg Config) error {
 	if cfg.StoreEnabled {
 		defaultMode = hostModeStore
 	}
-	storeCtrl := newStoreController(gctx, storeProv, c, dcrlndPay, notifs, cfg.LogFn,
+	storeCtrl := newStoreController(gctx, storeProv, c, dcrlndPay, notifs, notes, cfg.LogFn,
 		cfg.PagesDir, cfg.StoreDir, storeMode{
 			Mode:       defaultMode,
 			PayType:    cfg.StorePayType,

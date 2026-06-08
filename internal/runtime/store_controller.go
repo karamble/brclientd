@@ -78,6 +78,7 @@ type storeController struct {
 	client   *client.Client
 	lnPay    *client.DcrlnPaymentClient
 	notifs   *notifBus
+	notes    *notificationStore
 	logFn    func(subsys string) slog.Logger
 	pagesDir string
 	storeDir string
@@ -94,7 +95,8 @@ type storeController struct {
 // mode over the passed config default. applyInitial must be called once to bind
 // the provider.
 func newStoreController(rootCtx context.Context, prov *switchableProvider, c *client.Client,
-	lnPay *client.DcrlnPaymentClient, notifs *notifBus, logFn func(string) slog.Logger,
+	lnPay *client.DcrlnPaymentClient, notifs *notifBus, notes *notificationStore,
+	logFn func(string) slog.Logger,
 	pagesDir, storeDir string, def storeMode) *storeController {
 
 	ctrl := &storeController{
@@ -102,6 +104,7 @@ func newStoreController(rootCtx context.Context, prov *switchableProvider, c *cl
 		client:   c,
 		lnPay:    lnPay,
 		notifs:   notifs,
+		notes:    notes,
 		logFn:    logFn,
 		pagesDir: pagesDir,
 		storeDir: storeDir,
@@ -200,9 +203,13 @@ func (s *storeController) enableStoreLocked() error {
 		},
 		OrderPlaced: func(order *simplestore.Order, msg string) {
 			s.publishOrder("store-order-placed", order, msg)
+			s.addOrderNote("New store order", order)
 		},
 		StatusChanged: func(order *simplestore.Order, msg string) {
 			s.publishOrder("store-order-status", order, msg)
+			if order.Status == simplestore.StatusPaid {
+				s.addOrderNote("Store payment received", order)
+			}
 		},
 	})
 	if err != nil {
@@ -238,6 +245,20 @@ func (s *storeController) publishOrder(typ string, order *simplestore.Order, msg
 			"msg":      msg,
 		},
 	})
+}
+
+// addOrderNote records a persisted bell note for a store order event (a new
+// order or a settled payment) so the dashboard's notification bell surfaces it.
+func (s *storeController) addOrderNote(subject string, order *simplestore.Order) {
+	if s.notes == nil {
+		return
+	}
+	buyer := order.User.String()
+	if nick, err := s.client.UserNick(order.User); err == nil && nick != "" {
+		buyer = nick
+	}
+	detail := fmt.Sprintf("Order #%d for $%.2f from %s", uint64(order.ID), order.Total(), buyer)
+	s.notes.add("info", subject, detail, order.User.String())
 }
 
 func (s *storeController) loadMode() (storeMode, bool) {

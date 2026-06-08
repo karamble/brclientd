@@ -652,6 +652,18 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 					"timestamp":   ts,
 				},
 			})
+			// Bell note for a new comment on one of OUR posts. Own-post statuses
+			// arrive with a nil remote user; exclude our own comments, which
+			// round-trip the same way.
+			if cfg.Notes != nil && ru == nil && brc != nil && statusFrom != brc.PublicID() {
+				nick := pms.Attributes[rpc.RMPFromNick]
+				if nick == "" {
+					nick = statusFrom.String()
+				}
+				cfg.Notes.add("info", "New comment on your post",
+					fmt.Sprintf("%s commented: %s", nick, truncateRunes(commentBody, 80)),
+					statusFrom.String())
+			}
 			return
 		}
 		if heartVal != "" {
@@ -666,6 +678,17 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 					"value":       heartVal,
 				},
 			})
+			// Bell note when someone likes one of OUR posts (the +1 only, not an
+			// un-like). Own-post statuses arrive with a nil remote user.
+			if cfg.Notes != nil && ru == nil && heartVal == rpc.RMPSHeartYes &&
+				brc != nil && statusFrom != brc.PublicID() {
+				nick := pms.Attributes[rpc.RMPFromNick]
+				if nick == "" {
+					nick = statusFrom.String()
+				}
+				cfg.Notes.add("info", "New like on your post",
+					fmt.Sprintf("%s liked your post", nick), statusFrom.String())
+			}
 		}
 	}))
 
