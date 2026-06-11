@@ -1,6 +1,6 @@
 module github.com/karamble/brclientd
 
-go 1.25
+go 1.26
 
 require (
 	github.com/companyzero/bisonrelay v0.2.4

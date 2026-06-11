@@ -1,7 +1,7 @@
 ARG BUILDKIT_CONTEXT_KEEP_GIT_DIR=1
 ARG BR_VERSION=
 
-FROM golang:1.25-alpine AS build
+FROM golang:1.26-alpine AS build
 ARG BR_VERSION
 RUN apk add --no-cache git
 WORKDIR /src
