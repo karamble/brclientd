@@ -17,7 +17,10 @@ require (
 // Use our fork with the RTDTAudioStreamHandler / RTDTChatStreamHandler
 // Config hooks (see br-audio-hook gist in memory). Reverts to upstream
 // once the patch lands there.
-replace github.com/companyzero/bisonrelay => github.com/karamble/bisonrelay v0.0.0-20260523194908-7c5686d92657
+// Pinned to upstream Bison Relay. RTDT audio needs the fork (it adds the
+// Config.RTDTAudioStreamHandler hook); to build the fork variant, re-enable the
+// replace below together with the dormant audio-hook code in br_client.go.
+// replace github.com/companyzero/bisonrelay => github.com/karamble/bisonrelay v0.0.0-20260523194908-7c5686d92657
 
 require (
 	decred.org/cspp/v2 v2.4.0 // indirect
