@@ -52,6 +52,14 @@ type Config struct {
 	DataDir           string
 	AppDataDir        string
 
+	// Proxy routes the BR relay/seeder connection through a SOCKS5 proxy. The
+	// dcrlnd gRPC connection is local and stays direct. Mirrors dcrd's flags.
+	ProxyAddr    string
+	ProxyUser    string
+	ProxyPass    string
+	TorIsolation bool
+	CircuitLimit uint32
+
 	// SimpleStore hosting. When StoreEnabled, the node serves a simplestore
 	// from StoreDir over the relay instead of static pages (one resource
 	// provider binds at the root). StorePayType is "ln" or "onchain".
@@ -152,6 +160,11 @@ func Run(ctx context.Context, cfg Config) error {
 		DcrlndPay:           dcrlndPay,
 		BRServer:            cfg.BRServer,
 		SeederCachePath:     cfg.SeederCachePath,
+		ProxyAddr:           cfg.ProxyAddr,
+		ProxyUser:           cfg.ProxyUser,
+		ProxyPass:           cfg.ProxyPass,
+		TorIsolation:        cfg.TorIsolation,
+		CircuitLimit:        cfg.CircuitLimit,
 		Tracker:             tracker,
 		Notifs:              notifs,
 		AudioRouter:         audioRouter,

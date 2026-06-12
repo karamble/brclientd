@@ -22,6 +22,7 @@ import (
 	// rtdtclient "github.com/companyzero/bisonrelay/rtdt/client" // dormant: RTDT audio hook is fork-only (see below)
 	"github.com/companyzero/bisonrelay/zkidentity"
 	"github.com/decred/dcrlnd/lnrpc"
+	"github.com/decred/go-socks/socks"
 	"github.com/decred/slog"
 )
 
@@ -34,6 +35,11 @@ type BRClientCfg struct {
 	DcrlndPay       *client.DcrlnPaymentClient
 	BRServer        string
 	SeederCachePath string
+	ProxyAddr       string
+	ProxyUser       string
+	ProxyPass       string
+	TorIsolation    bool
+	CircuitLimit    uint32
 	Tracker         *Tracker
 	Notifs          *notifBus
 	AudioRouter     *RTDTAudioRouter
@@ -64,8 +70,29 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 	// clientintf.WithSeeder that caches the resolved server address so BR's
 	// connKeeper does not hammer the seeder on every reconnect attempt when
 	// the BR server is briefly unreachable.
-	netDialer := &net.Dialer{}
-	dialer := cachedSeederDialer(cfg.BRServer, cfg.LogFn("CONN"), netDialer.DialContext, cfg.SeederCachePath)
+	// Route the relay/seeder connection through a SOCKS5 proxy when configured
+	// (Tor). Stream isolation uses a per-connection circuit pool; otherwise a
+	// single proxy dialer. The dcrlnd gRPC connection is separate and stays
+	// direct. Mirrors decred/dcrd and upstream brclient.
+	var dialFunc clientintf.DialFunc = (&net.Dialer{}).DialContext
+	if cfg.ProxyAddr != "" {
+		proxy := socks.Proxy{
+			Addr:         cfg.ProxyAddr,
+			Username:     cfg.ProxyUser,
+			Password:     cfg.ProxyPass,
+			TorIsolation: cfg.TorIsolation,
+		}
+		if cfg.TorIsolation {
+			limit := cfg.CircuitLimit
+			if limit == 0 {
+				limit = 32
+			}
+			dialFunc = socks.NewPool(proxy, limit).DialContext
+		} else {
+			dialFunc = proxy.DialContext
+		}
+	}
+	dialer := cachedSeederDialer(cfg.BRServer, cfg.LogFn("CONN"), dialFunc, cfg.SeederCachePath)
 
 	// Assigned after client.New below; notification callbacks only fire once
 	// the client runs, so closures capturing brc see the live client.

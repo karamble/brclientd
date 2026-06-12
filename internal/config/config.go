@@ -76,6 +76,12 @@ type Config struct {
 	SimNet      bool   `long:"simnet" description:"Use the simulation network"`
 	BRServer    string `long:"brserver" description:"Bison Relay relay server address"`
 
+	Proxy        string `long:"proxy" description:"Connect via SOCKS5 proxy (eg. 127.0.0.1:9050)"`
+	ProxyUser    string `long:"proxyuser" description:"Username for proxy server"`
+	ProxyPass    string `long:"proxypass" description:"Password for proxy server"`
+	TorIsolation bool   `long:"torisolation" description:"Enable Tor stream isolation by randomizing user credentials for each connection"`
+	CircuitLimit uint32 `long:"circuitlimit" description:"Maximum number of open connections per proxy connection (default 32)"`
+
 	Dcrlnd      DcrlndOptions      `group:"dcrlnd options" namespace:"dcrlnd"`
 	ClientRPC   ClientRPCOptions   `group:"clientrpc options" namespace:"clientrpc"`
 	Status      StatusOptions      `group:"status options" namespace:"status"`

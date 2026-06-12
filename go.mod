@@ -6,6 +6,7 @@ require (
 	github.com/companyzero/bisonrelay v0.2.4
 	github.com/decred/dcrd/dcrutil/v4 v4.0.2
 	github.com/decred/dcrlnd v0.7.7-0.20250507095325-b1dd23fd5d7a
+	github.com/decred/go-socks v1.1.0
 	github.com/decred/slog v1.2.0
 	github.com/gorilla/websocket v1.5.1
 	github.com/jessevdk/go-flags v1.6.1
@@ -74,7 +75,6 @@ require (
 	github.com/decred/dcrd/wire v1.7.0 // indirect
 	github.com/decred/dcrlnlpd v0.0.0-20240916120255-786dc5d52075 // indirect
 	github.com/decred/dcrtest/dcrdtest v1.0.1-0.20240514160637-ade8c37ad1db // indirect
-	github.com/decred/go-socks v1.1.0 // indirect
 	github.com/decred/lightning-onion/v4 v4.0.1 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/fergusstrange/embedded-postgres v1.25.0 // indirect
