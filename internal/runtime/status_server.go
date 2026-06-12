@@ -184,6 +184,7 @@ func (s *StatusServer) Run(ctx context.Context) error {
 	mux.HandleFunc("/files/send", s.handleSendFile)
 	mux.HandleFunc("/stats/overview", s.handleStatsOverview)
 	mux.HandleFunc("/stats/payments", s.handleStatsPayments)
+	mux.HandleFunc("/stats/payments/clear", s.handleClearPayStats)
 	mux.HandleFunc("/stats/network", s.handleStatsNetwork)
 	mux.HandleFunc("/stats/contacts", s.handleStatsContacts)
 	mux.HandleFunc("/stats/posts", s.handleStatsPosts)
@@ -2950,6 +2951,27 @@ func (s *StatusServer) handleStatsOverview(w http.ResponseWriter, r *http.Reques
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(out)
+}
+
+// handleClearPayStats removes the recorded payment stats of a single user.
+// Mirrors bruig's per-user trash action (CTClearPayStats); the library
+// deletes the user's paystats file and summary entry, so the user drops out
+// of ListPaymentStats until new payments are recorded.
+func (s *StatusServer) handleClearPayStats(w http.ResponseWriter, r *http.Request) {
+	uid, ok := s.decodeUIDOnlyBody(w, r)
+	if !ok {
+		return
+	}
+	c := s.currentClient()
+	if c == nil {
+		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
+		return
+	}
+	if err := c.ClearPayStats(&uid); err != nil {
+		http.Error(w, "clear pay stats: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleStatsPayments returns the per-user payment table plus the per-user
