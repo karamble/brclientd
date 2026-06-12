@@ -47,6 +47,7 @@ type BRClientCfg struct {
 	Unrepl          *unreplTracker
 	DownloadCaps    *downloadCapTracker
 	Notes           *notificationStore
+	Groups          *contactGroupsStore
 	LogFn           func(subsys string) slog.Logger
 	IdentityChan    <-chan *zkidentity.FullIdentity
 
@@ -1158,6 +1159,15 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 		// never invoked for history/backlog, so the dashboard can badge from this
 		// in-process event without the replay that ChatService.PMStream incurs.
 		ntfns.Register(client.OnPMNtfn(func(ru *client.RemoteUser, pm rpc.RMPrivateMessage, ts time.Time) {
+			// A new message returns auto-archived (non-pinned) contacts
+			// to the regular list before the pm event is published.
+			if cfg.Groups != nil && cfg.Groups.maybeAutoUnarchive(ru.ID().String()) {
+				notifs.Publish(NotifEvent{
+					Type:      "contact-groups-changed",
+					Timestamp: ts,
+					Payload:   map[string]any{"uid": ru.ID().String(), "group": ""},
+				})
+			}
 			notifs.Publish(NotifEvent{
 				Type:      "pm",
 				Timestamp: ts,
@@ -1478,4 +1488,55 @@ func matomsToDCR(matoms int64) float64 {
 // don't render as "0.00100000" while large tips still show full precision.
 func formatDCR(dcr float64) string {
 	return strconv.FormatFloat(dcr, 'f', -1, 64)
+}
+
+// groupsSweeper periodically auto-archives contacts unheard for longer than
+// the configured threshold and prunes assignments of removed contacts.
+func groupsSweeper(ctx context.Context, c *client.Client, groups *contactGroupsStore, notifs *notifBus) error {
+	t := time.NewTicker(12 * time.Hour)
+	defer t.Stop()
+	for {
+		sweepContactGroups(c, groups, notifs)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-t.C:
+		}
+	}
+}
+
+func sweepContactGroups(c *client.Client, groups *contactGroupsStore, notifs *notifBus) {
+	days := groups.autoArchiveDays()
+	cutoff := time.Now().AddDate(0, 0, -days)
+	entries := c.AddressBook()
+	valid := make(map[string]bool, len(entries))
+	for _, e := range entries {
+		if e.ID == nil {
+			continue
+		}
+		uid := e.ID.Identity.String()
+		valid[uid] = true
+		if days <= 0 {
+			continue
+		}
+		// Reference time mirrors the stats page's "heard" age: last
+		// decrypted message when available, else the KX timestamps.
+		ref := e.FirstCreated
+		if e.LastCompletedKX.After(ref) {
+			ref = e.LastCompletedKX
+		}
+		if ru, err := c.UserByID(e.ID.Identity); err == nil && ru != nil {
+			if d := ru.RatchetDebugInfo(); !d.LastDecTime.IsZero() {
+				ref = d.LastDecTime
+			}
+		}
+		if ref.Before(cutoff) && groups.autoArchive(uid) {
+			notifs.Publish(NotifEvent{
+				Type:      "contact-groups-changed",
+				Timestamp: time.Now(),
+				Payload:   map[string]any{"uid": uid, "group": archivedGroupID},
+			})
+		}
+	}
+	groups.prune(valid)
 }

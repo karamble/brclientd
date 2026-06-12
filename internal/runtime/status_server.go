@@ -50,6 +50,7 @@ type StatusServer struct {
 	Unrepl       *unreplTracker
 	DownloadCaps *downloadCapTracker
 	Notes        *notificationStore
+	Groups       *contactGroupsStore
 	AppName      string
 	AppVersion   string
 
@@ -126,6 +127,9 @@ func (s *StatusServer) Run(ctx context.Context) error {
 	mux.HandleFunc("/history/pm/clear", s.handleClearPMHistory)
 	mux.HandleFunc("/contacts", s.handleContacts)
 	mux.HandleFunc("/contacts/rename", s.handleRenameContact)
+	mux.HandleFunc("/contacts/groups", s.handleContactGroups)
+	mux.HandleFunc("/contacts/groups/assign", s.handleContactGroupsAssign)
+	mux.HandleFunc("/contacts/groups/settings", s.handleContactGroupsSettings)
 	mux.HandleFunc("/contacts/kx-reset", s.handleKXReset)
 	mux.HandleFunc("/contacts/reset-all", s.handleKXResetAll)
 	mux.HandleFunc("/contacts/block", s.handleBlockContact)
@@ -340,14 +344,19 @@ func (s *StatusServer) handleContacts(w http.ResponseWriter, r *http.Request) {
 	}
 	type contactEntry struct {
 		*clientdb.AddressBookEntry
-		PostsSubscribed bool `json:"posts_subscribed"`
+		PostsSubscribed bool      `json:"posts_subscribed"`
+		LastDecTime     time.Time `json:"last_dec_time"`
 	}
 	out := make([]contactEntry, 0, len(entries))
 	for _, e := range entries {
-		out = append(out, contactEntry{
+		ce := contactEntry{
 			AddressBookEntry: e,
 			PostsSubscribed:  subscribed[e.ID.Identity],
-		})
+		}
+		if ru, err := c.UserByID(e.ID.Identity); err == nil && ru != nil {
+			ce.LastDecTime = ru.RatchetDebugInfo().LastDecTime
+		}
+		out = append(out, ce)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(struct {
@@ -391,6 +400,132 @@ func (s *StatusServer) handleRenameContact(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "rename user: "+err.Error(), http.StatusBadGateway)
 		return
 	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// publishGroupsChanged tells live UIs to re-fetch the contact group layout.
+func (s *StatusServer) publishGroupsChanged(uid, group string) {
+	if s.Notifs == nil {
+		return
+	}
+	s.Notifs.Publish(NotifEvent{
+		Type:      "contact-groups-changed",
+		Timestamp: time.Now(),
+		Payload:   map[string]any{"uid": uid, "group": group},
+	})
+}
+
+// handleContactGroups serves the contact group layout (GET) and group
+// create/rename/delete actions (POST). Contacts are keyed by their
+// zkidentity hex string; "archived" is the reserved builtin group.
+func (s *StatusServer) handleContactGroups(w http.ResponseWriter, r *http.Request) {
+	if s.Groups == nil {
+		http.Error(w, "groups store not available", http.StatusServiceUnavailable)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(s.Groups.snapshot())
+	case http.MethodPost:
+		var req struct {
+			Action string `json:"action"`
+			ID     string `json:"id"`
+			Name   string `json:"name"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		switch req.Action {
+		case "create":
+			g, err := s.Groups.createGroup(req.Name)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			s.publishGroupsChanged("", g.ID)
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(g)
+		case "rename":
+			if err := s.Groups.renameGroup(req.ID, req.Name); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			s.publishGroupsChanged("", req.ID)
+			w.WriteHeader(http.StatusNoContent)
+		case "delete":
+			if err := s.Groups.deleteGroup(req.ID); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			s.publishGroupsChanged("", "")
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.Error(w, "unknown action", http.StatusBadRequest)
+		}
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleContactGroupsAssign moves one contact into a group ("" returns it to
+// the regular list). Pinned keeps an archived contact archived when new
+// messages arrive.
+func (s *StatusServer) handleContactGroupsAssign(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.Groups == nil {
+		http.Error(w, "groups store not available", http.StatusServiceUnavailable)
+		return
+	}
+	var req struct {
+		UID    string `json:"uid"`
+		Group  string `json:"group"`
+		Pinned bool   `json:"pinned"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	var uid zkidentity.ShortID
+	if err := uid.FromString(req.UID); err != nil {
+		http.Error(w, "invalid uid: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := s.Groups.assign(uid.String(), req.Group, req.Pinned); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	s.publishGroupsChanged(uid.String(), req.Group)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleContactGroupsSettings updates the auto-archive threshold in days
+// (0 disables the sweeper).
+func (s *StatusServer) handleContactGroupsSettings(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.Groups == nil {
+		http.Error(w, "groups store not available", http.StatusServiceUnavailable)
+		return
+	}
+	var req struct {
+		AutoArchiveDays int `json:"auto_archive_days"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := s.Groups.setAutoArchiveDays(req.AutoArchiveDays); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	s.publishGroupsChanged("", "")
 	w.WriteHeader(http.StatusNoContent)
 }
 

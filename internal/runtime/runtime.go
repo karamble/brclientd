@@ -95,6 +95,7 @@ func Run(ctx context.Context, cfg Config) error {
 	downloadCaps := newDownloadCapTracker()
 	notes := newNotificationStore(cfg.DataDir)
 	brSettings := newBRSettingsStore(cfg.DataDir)
+	groups := newContactGroupsStore(cfg.DataDir)
 	effectiveSRR := brSettings.sendReceiveReceipts()
 	restartCh := make(chan struct{})
 
@@ -121,6 +122,7 @@ func Run(ctx context.Context, cfg Config) error {
 		Unrepl:       unrepl,
 		DownloadCaps: downloadCaps,
 		Notes:        notes,
+		Groups:       groups,
 		Settings:     brSettings,
 		SRREffective: effectiveSRR,
 		RestartCh:    restartCh,
@@ -172,6 +174,7 @@ func Run(ctx context.Context, cfg Config) error {
 		Unrepl:              unrepl,
 		DownloadCaps:        downloadCaps,
 		Notes:               notes,
+		Groups:              groups,
 		SendReceiveReceipts: effectiveSRR,
 		LogFn:               cfg.LogFn,
 		IdentityChan:        identityChan,
@@ -181,6 +184,9 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 	statusSrv.SetClient(c)
+
+	// Auto-archive contacts unheard past the configured threshold.
+	g.Go(func() error { return groupsSweeper(gctx, c, groups, notifs) })
 
 	// One-shot: a restore-triggered boot leaves a marker; initiate KX
 	// resets with all restored contacts once the server session is up.
