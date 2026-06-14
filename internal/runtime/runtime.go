@@ -162,6 +162,7 @@ func Run(ctx context.Context, cfg Config) error {
 		DcrlndPay:           dcrlndPay,
 		BRServer:            cfg.BRServer,
 		SeederCachePath:     cfg.SeederCachePath,
+		MsgsRoot:            cfg.MsgsRoot,
 		ProxyAddr:           cfg.ProxyAddr,
 		ProxyUser:           cfg.ProxyUser,
 		ProxyPass:           cfg.ProxyPass,

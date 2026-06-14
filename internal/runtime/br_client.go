@@ -9,7 +9,9 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net"
+	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -35,21 +37,24 @@ type BRClientCfg struct {
 	DcrlndPay       *client.DcrlnPaymentClient
 	BRServer        string
 	SeederCachePath string
-	ProxyAddr       string
-	ProxyUser       string
-	ProxyPass       string
-	TorIsolation    bool
-	CircuitLimit    uint32
-	Tracker         *Tracker
-	Notifs          *notifBus
-	AudioRouter     *RTDTAudioRouter
-	Reinvites       *gcReinviteTracker
-	Unrepl          *unreplTracker
-	DownloadCaps    *downloadCapTracker
-	Notes           *notificationStore
-	Groups          *contactGroupsStore
-	LogFn           func(subsys string) slog.Logger
-	IdentityChan    <-chan *zkidentity.FullIdentity
+	// MsgsRoot is the message-log directory; used to recover a GC's name from
+	// its log filename after the GC has been deleted locally (e.g. on a kick).
+	MsgsRoot     string
+	ProxyAddr    string
+	ProxyUser    string
+	ProxyPass    string
+	TorIsolation bool
+	CircuitLimit uint32
+	Tracker      *Tracker
+	Notifs       *notifBus
+	AudioRouter  *RTDTAudioRouter
+	Reinvites    *gcReinviteTracker
+	Unrepl       *unreplTracker
+	DownloadCaps *downloadCapTracker
+	Notes        *notificationStore
+	Groups       *contactGroupsStore
+	LogFn        func(subsys string) slog.Logger
+	IdentityChan <-chan *zkidentity.FullIdentity
 
 	// SendReceiveReceipts forwards into client.Config.SendReceiveReceipts:
 	// send receive receipts to post authors for received posts and comments.
@@ -1245,15 +1250,31 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 			})
 		}))
 		ntfns.Register(client.OnRemovedGCMembersNtfn(func(gc rpc.RMGroupList, uids []clientintf.UserID) {
+			self := false
+			if brc != nil {
+				me := brc.PublicID()
+				for _, u := range uids {
+					if u == me {
+						self = true
+						break
+					}
+				}
+			}
 			notifs.Publish(NotifEvent{
 				Type: "gc-members-removed",
 				Payload: map[string]any{
 					"gcid":    gc.ID.String(),
 					"removed": userIDsToStrings(uids),
+					"self":    self,
+					"gcName":  gc.Name,
 				},
 			})
+			// The bell note for self-removal is added in OnGCUserPartedNtfn (the
+			// explicit per-user kick event) to avoid a duplicate note here.
 		}))
 		ntfns.Register(client.OnGCUserPartedNtfn(func(gcid client.GCID, uid client.UserID, reason string, kicked bool) {
+			self := brc != nil && uid == brc.PublicID()
+			name := gcDisplayName(brc, gcid, cfg.MsgsRoot)
 			notifs.Publish(NotifEvent{
 				Type: "gc-parted",
 				Payload: map[string]any{
@@ -1261,10 +1282,25 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 					"uid":    uid.String(),
 					"reason": reason,
 					"kicked": kicked,
+					"self":   self,
+					"gcName": name,
 				},
 			})
+			if self && cfg.Notes != nil {
+				if kicked {
+					detail := "You were removed from \"" + name + "\""
+					if reason != "" {
+						detail += ". Reason: " + reason
+					}
+					cfg.Notes.add("warn", "Removed from group", detail, "")
+				} else {
+					cfg.Notes.add("info", "Left group",
+						"You left \""+name+"\"", "")
+				}
+			}
 		}))
 		ntfns.Register(client.OnGCKilledNtfn(func(ru *client.RemoteUser, gcid client.GCID, reason string) {
+			name := gcDisplayName(brc, gcid, cfg.MsgsRoot)
 			notifs.Publish(NotifEvent{
 				Type: "gc-killed",
 				Payload: map[string]any{
@@ -1272,8 +1308,16 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 					"by":     ru.ID().String(),
 					"byNick": ru.Nick(),
 					"reason": reason,
+					"gcName": name,
 				},
 			})
+			if cfg.Notes != nil {
+				detail := "\"" + name + "\" was dissolved by " + ru.Nick()
+				if reason != "" {
+					detail += ". Reason: " + reason
+				}
+				cfg.Notes.add("warn", "Group dissolved", detail, "")
+			}
 		}))
 		ntfns.Register(client.OnGCUpgradedNtfn(func(gc rpc.RMGroupList, oldVersion uint8) {
 			notifs.Publish(NotifEvent{
@@ -1475,6 +1519,49 @@ func userIDsToStrings(ids []clientintf.UserID) []string {
 		out[i] = id.String()
 	}
 	return out
+}
+
+// gcDisplayName resolves a human label for a GC id (local alias preferred, then
+// the GC name), falling back to the persisted message-log filename and finally a
+// short id. The msglog fallback matters because the BR client deletes the GC
+// locally the moment we are kicked - before our notification handler runs - so
+// the live DB lookups fail; the log file keeps the name across the delete and
+// daemon restarts.
+func gcDisplayName(c *client.Client, gcid client.GCID, msgsRoot string) string {
+	if c != nil {
+		if alias, err := c.GetGCAlias(gcid); err == nil && alias != "" {
+			return alias
+		}
+		if gc, err := c.GetGC(gcid); err == nil && gc.Name != "" {
+			return gc.Name
+		}
+	}
+	if name := gcNameFromMsgLog(msgsRoot, gcid); name != "" {
+		return name
+	}
+	return gcid.ShortLogID()
+}
+
+// gcNameFromMsgLog recovers a GC's name from its message-log filename
+// (groupchat.<name>.<gcid>.log). The gcid is the last 64 hex chars, so names
+// that themselves contain dots are handled. Returns "" if no log file is found.
+func gcNameFromMsgLog(msgsRoot string, gcid client.GCID) string {
+	if msgsRoot == "" {
+		return ""
+	}
+	const prefix = "groupchat."
+	suffix := "." + gcid.String() + ".log"
+	entries, err := os.ReadDir(msgsRoot)
+	if err != nil {
+		return ""
+	}
+	for _, e := range entries {
+		n := e.Name()
+		if strings.HasPrefix(n, prefix) && strings.HasSuffix(n, suffix) {
+			return n[len(prefix) : len(n)-len(suffix)]
+		}
+	}
+	return ""
 }
 
 // matomsToDCR converts BR's internal milli-atom unit (1 DCR = 1e11 matoms)

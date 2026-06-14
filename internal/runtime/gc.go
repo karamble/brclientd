@@ -119,17 +119,21 @@ func (s *StatusServer) requireGCClient(w http.ResponseWriter, r *http.Request, m
 // gcSummary is the wire shape returned by /gc and /gc/{gcid}. Keep it
 // shallow so the dashboard doesn't depend on internal BR struct shapes.
 type gcSummary struct {
-	ID          string   `json:"id"`
-	Name        string   `json:"name"`
-	Alias       string   `json:"alias,omitempty"`
-	Generation  uint64   `json:"generation"`
-	Version     uint8    `json:"version"`
-	Owner       string   `json:"owner"`
-	Members     []string `json:"members"`
-	ExtraAdmins []string `json:"extra_admins,omitempty"`
-	Blocked     []string `json:"blocked,omitempty"`
-	LocalIsOwner bool    `json:"local_is_owner"`
-	LocalIsAdmin bool    `json:"local_is_admin"`
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
+	Alias        string   `json:"alias,omitempty"`
+	Generation   uint64   `json:"generation"`
+	Version      uint8    `json:"version"`
+	Owner        string   `json:"owner"`
+	Members      []string `json:"members"`
+	ExtraAdmins  []string `json:"extra_admins,omitempty"`
+	Blocked      []string `json:"blocked,omitempty"`
+	LocalIsOwner bool     `json:"local_is_owner"`
+	LocalIsAdmin bool     `json:"local_is_admin"`
+	// LocalIsMember is false once the local client has been removed from the GC
+	// (the BR client keeps the GC entry but drops us from the member list); the
+	// dashboard uses this to mark a GC we were kicked from.
+	LocalIsMember bool `json:"local_is_member"`
 }
 
 func summarizeGC(c *client.Client, dbGC *clientdb.GroupChat, includeBlocklist bool) gcSummary {
@@ -152,6 +156,12 @@ func summarizeGC(c *client.Client, dbGC *clientdb.GroupChat, includeBlocklist bo
 		out.ExtraAdmins = append(out.ExtraAdmins, a.String())
 	}
 	self := c.PublicID()
+	for _, m := range dbGC.Metadata.Members {
+		if m == self {
+			out.LocalIsMember = true
+			break
+		}
+	}
 	if len(dbGC.Metadata.Members) > 0 && dbGC.Metadata.Members[0] == self {
 		out.LocalIsOwner = true
 		out.LocalIsAdmin = true
@@ -350,8 +360,8 @@ func (s *StatusServer) handleGCMessage(w http.ResponseWriter, r *http.Request, g
 		return
 	}
 	var req struct {
-		Message string           `json:"message"`
-		Mode    rpc.MessageMode  `json:"mode"`
+		Message string          `json:"message"`
+		Mode    rpc.MessageMode `json:"mode"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
