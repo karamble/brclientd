@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -27,6 +28,7 @@ import (
 	"github.com/decred/slog"
 
 	"github.com/karamble/brclientd/internal/certgen"
+	"github.com/karamble/brclientd/internal/identity"
 )
 
 // StatusServer serves the mTLS HTTP surface dcrpulse-style dashboards use
@@ -133,6 +135,8 @@ func (s *StatusServer) Run(ctx context.Context) error {
 	mux.HandleFunc("/contacts/kx-reset", s.handleKXReset)
 	mux.HandleFunc("/contacts/reset-all", s.handleKXResetAll)
 	mux.HandleFunc("/contacts/block", s.handleBlockContact)
+	mux.HandleFunc("/contacts/blocked", s.handleBlockedContacts)
+	mux.HandleFunc("/contacts/unblock", s.handleUnblockContact)
 	mux.HandleFunc("/contacts/ignore", s.handleIgnoreContact)
 	mux.HandleFunc("/contacts/handshake", s.handleHandshake)
 	mux.HandleFunc("/contacts/suggest-kx", s.handleSuggestKX)
@@ -689,6 +693,132 @@ func (s *StatusServer) handleIgnoreContact(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// blockedUsersFile mirrors the BR library's clientdb filename for the persisted
+// block list (a uid-hex -> block-time map). The library loads it into an
+// in-memory set once at DB open and only rewrites it on a new block, exposing
+// no API to list or remove entries, so brclientd owns this file directly for
+// the dashboard's blocked-contacts management.
+const blockedUsersFile = "blockedusers.json"
+
+// blockedUsersPath returns the block-list file at the clientdb root, derived
+// the same way the DB itself is opened (identity.PathsIn).
+func (s *StatusServer) blockedUsersPath() string {
+	return filepath.Join(identity.PathsIn(s.DataDir).Root, blockedUsersFile)
+}
+
+// readBlockedUsers loads the block map. A missing file means nothing was ever
+// blocked.
+func (s *StatusServer) readBlockedUsers() (map[string]time.Time, error) {
+	b, err := os.ReadFile(s.blockedUsersPath())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return map[string]time.Time{}, nil
+		}
+		return nil, err
+	}
+	blocked := make(map[string]time.Time)
+	if err := json.Unmarshal(b, &blocked); err != nil {
+		return nil, err
+	}
+	return blocked, nil
+}
+
+// writeBlockedUsers persists the block map with an atomic temp-file + rename so
+// a concurrent read never sees a partial file. The only racing writer is
+// client.Block; the immediate restart that follows an unblock keeps the window
+// small.
+func (s *StatusServer) writeBlockedUsers(blocked map[string]time.Time) error {
+	b, err := json.Marshal(blocked)
+	if err != nil {
+		return err
+	}
+	path := s.blockedUsersPath()
+	tmp, err := os.CreateTemp(filepath.Dir(path), blockedUsersFile+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(b); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	return os.Rename(tmpName, path)
+}
+
+// handleBlockedContacts lists the locally blocked users. dcrpulse-original: BR
+// exposes no API to enumerate the block list, so this reads blockedusers.json
+// directly, newest block first. Pure filesystem read; works without a live BR
+// client. Blocked users have no address book entry (deleted on block), so only
+// the uid and block time are available.
+func (s *StatusServer) handleBlockedContacts(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	blocked, err := s.readBlockedUsers()
+	if err != nil {
+		http.Error(w, "read blocked users: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	type entry struct {
+		UID       string    `json:"uid"`
+		BlockedAt time.Time `json:"blockedAt"`
+	}
+	out := struct {
+		Blocked []entry `json:"blocked"`
+	}{Blocked: make([]entry, 0, len(blocked))}
+	for uid, ts := range blocked {
+		out.Blocked = append(out.Blocked, entry{UID: uid, BlockedAt: ts})
+	}
+	sort.Slice(out.Blocked, func(i, j int) bool {
+		return out.Blocked[i].BlockedAt.After(out.Blocked[j].BlockedAt)
+	})
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(out); err != nil {
+		s.Log.Warnf("encode blocked users: %v", err)
+	}
+}
+
+// handleUnblockContact removes one uid from the BR block list. dcrpulse-original:
+// BR has no unblock API and never re-reads blockedusers.json after DB open, so
+// this rewrites the file with the uid dropped and then requests a daemon restart
+// so the reopened clientdb loads the change. Until that restart the live
+// client's in-memory block set is unchanged. BR's block is symmetric (the peer
+// also blocked this client), so reconnecting still needs the peer to unblock
+// plus a fresh KX.
+func (s *StatusServer) handleUnblockContact(w http.ResponseWriter, r *http.Request) {
+	uid, ok := s.decodeUIDOnlyBody(w, r)
+	if !ok {
+		return
+	}
+	blocked, err := s.readBlockedUsers()
+	if err != nil {
+		http.Error(w, "read blocked users: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if _, found := blocked[uid.String()]; !found {
+		http.Error(w, "user is not blocked", http.StatusNotFound)
+		return
+	}
+	delete(blocked, uid.String())
+	if err := s.writeBlockedUsers(blocked); err != nil {
+		http.Error(w, "write blocked users: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.requestRestart()
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(struct {
+		Restarting bool `json:"restarting"`
+	}{Restarting: true}); err != nil {
+		s.Log.Warnf("encode unblock response: %v", err)
+	}
 }
 
 // handleHandshake starts a 3-way handshake with the specified user. Mirrors
