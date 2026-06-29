@@ -28,6 +28,25 @@ import (
 	"github.com/decred/slog"
 )
 
+// buildBRDownloadTag renders the inline download-chip tag the dashboard parses
+// (mirrors the web buildDownloadTag: nick and name with ',' and '=' removed, a
+// plain integer size, no type), so a received file shows as the same clickable
+// chip in the chat history.
+func buildBRDownloadTag(nick, filename string, size uint64) string {
+	strip := strings.NewReplacer(",", "", "=", "").Replace
+	var parts []string
+	if nick != "" {
+		parts = append(parts, "nick="+strip(nick))
+	}
+	if filename != "" {
+		parts = append(parts, "name="+strip(filename))
+	}
+	if size > 0 {
+		parts = append(parts, fmt.Sprintf("size=%d", size))
+	}
+	return "--download[" + strings.Join(parts, ",") + "]--"
+}
+
 // BRClientCfg describes what runtime.Run needs to build a BR client. The
 // concrete *client.DcrlnPaymentClient is required (not the abstract
 // PaymentClient interface) so the CheckServerSession closure can hand its
@@ -751,20 +770,39 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 	// path BR wrote the bytes to.
 	ntfns.Register(client.OnFileDownloadCompleted(func(ru *client.RemoteUser, fm rpc.FileMetadata, diskPath string) {
 		nlog.Infof("Completed download %s from %s -> %s", fm.Filename, ru.Nick(), diskPath)
-		if cfg.Notifs == nil {
-			return
+
+		// Persist a clickable download chip into the conversation history so the
+		// receipt survives a reload, logged as if sent by the peer (non-internal
+		// so it renders as the chip rather than a centered notice).
+		if cfg.DB != nil {
+			tag := buildBRDownloadTag(ru.Nick(), fm.Filename, fm.Size)
+			if err := cfg.DB.Update(context.Background(), func(tx clientdb.ReadWriteTx) error {
+				_, e := cfg.DB.LogPM(tx, ru.ID(), false, ru.Nick(), tag, time.Now())
+				return e
+			}); err != nil {
+				nlog.Warnf("log received file to history: %v", err)
+			}
 		}
-		cfg.Notifs.Publish(NotifEvent{
-			Type: "file-download-completed",
-			Payload: map[string]any{
-				"uid":       ru.ID().String(),
-				"nick":      ru.Nick(),
-				"fid":       clientdb.FileID(fm.MetadataHash()).String(),
-				"filename":  fm.Filename,
-				"size":      fm.Size,
-				"disk_path": diskPath,
-			},
-		})
+
+		// Persist a notification-bell entry.
+		if cfg.Notes != nil {
+			cfg.Notes.add("info", "File received",
+				fmt.Sprintf("%s from %s", fm.Filename, ru.Nick()), ru.ID().String())
+		}
+
+		if cfg.Notifs != nil {
+			cfg.Notifs.Publish(NotifEvent{
+				Type: "file-download-completed",
+				Payload: map[string]any{
+					"uid":       ru.ID().String(),
+					"nick":      ru.Nick(),
+					"fid":       clientdb.FileID(fm.MetadataHash()).String(),
+					"filename":  fm.Filename,
+					"size":      fm.Size,
+					"disk_path": diskPath,
+				},
+			})
+		}
 	}))
 
 	// OnContentListReceived fires when a remote user replies to our
