@@ -5,7 +5,6 @@
 package runtime
 
 import (
-	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -17,17 +16,11 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/companyzero/bisonrelay/client"
 	"github.com/companyzero/bisonrelay/client/clientintf"
 	"github.com/companyzero/bisonrelay/zkidentity"
 )
-
-// pageFetchTimeout bounds how long /pages/fetch waits for a resource reply
-// before giving up. Remote replies travel over the relay so allow a generous
-// window; local fetches resolve near-instantly.
-const pageFetchTimeout = 30 * time.Second
 
 // handlePagesFetch fetches a single page (resource) and blocks until the
 // reply lands, turning BR's async fetch-then-notify flow into one request.
@@ -114,12 +107,16 @@ func (s *StatusServer) handlePagesFetch(w http.ResponseWriter, r *http.Request) 
 		wantTag = uint64(tag)
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), pageFetchTimeout)
-	defer cancel()
+	// No fixed fetch deadline: a page reply travels over the relay and its
+	// transfer size and time are unbounded, so bound the wait by the request
+	// context (the caller's connection) instead of a timeout. A caller that
+	// navigates away cancels the request, which unblocks this wait; the
+	// deferred unsub then drops the subscription.
+	ctx := r.Context()
 	for {
 		select {
 		case <-ctx.Done():
-			http.Error(w, "no page reply within 30s: the peer may not host pages, or may be offline", http.StatusGatewayTimeout)
+			http.Error(w, "page fetch canceled", http.StatusGatewayTimeout)
 			return
 		case evt, ok := <-ch:
 			if !ok {
