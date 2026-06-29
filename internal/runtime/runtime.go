@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"path/filepath"
 
 	"github.com/companyzero/bisonrelay/client"
 	"github.com/companyzero/bisonrelay/client/clientdb"
@@ -365,8 +364,8 @@ func ensurePagesDir(dir string) error {
 	if len(entries) > 0 {
 		return nil
 	}
-	const starter = "# Welcome\n\nThis is your Bison Relay page. Edit it from the dashboard Pages tab.\n"
-	return os.WriteFile(filepath.Join(dir, "index.md"), []byte(starter), 0o600)
+	// Fresh pages dir: seed the dcrpulse demo blog instead of a bare welcome page.
+	return seedDemoPages(dir)
 }
 
 func buildListeners(certs certgen.Triplet, addresses []string) ([]net.Listener, error) {

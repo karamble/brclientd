@@ -296,6 +296,9 @@ func (s *StatusServer) handlePagesLocalSave(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "pages dir not configured", http.StatusServiceUnavailable)
 		return
 	}
+	// Cap the page body so a direct (localhost) caller can't write an unbounded
+	// page; the dashboard already limits proxied requests to 1 MiB.
+	r.Body = http.MaxBytesReader(w, r.Body, 8<<20)
 	var req struct {
 		Name    string `json:"name"`
 		Content string `json:"content"`
@@ -309,7 +312,19 @@ func (s *StatusServer) handlePagesLocalSave(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "invalid page name", http.StatusBadRequest)
 		return
 	}
+	// Pages are run through ProcessEmbeds when served, so an absolute or
+	// traversing embed localfilename would read files outside the pages dir.
+	if templateHasUnsafeEmbed(req.Content) {
+		http.Error(w, "page embeds may only reference files inside the pages directory", http.StatusBadRequest)
+		return
+	}
 	full := filepath.Join(s.PagesDir, name)
+	// Refuse to write through a pre-existing symlink (which could redirect the
+	// write outside the pages dir).
+	if fi, err := os.Lstat(full); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		http.Error(w, "refusing to write through a symlink", http.StatusBadRequest)
+		return
+	}
 	// Create any parent directories so subdirectory pages (docs/intro.md) save.
 	if err := os.MkdirAll(filepath.Dir(full), 0o700); err != nil {
 		http.Error(w, "create pages dir: "+err.Error(), http.StatusBadGateway)
