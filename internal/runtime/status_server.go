@@ -1586,7 +1586,9 @@ func (s *StatusServer) handleContentFile(w http.ResponseWriter, r *http.Request)
 		}
 		diskPath = d.DiskPath
 		if d.Metadata != nil {
-			filename = d.Metadata.Filename
+			// The filename is peer-supplied; run it through the same allowlist as
+			// uploads before using it in the Content-Disposition header.
+			filename = sanitizeUploadName(d.Metadata.Filename)
 		}
 		break
 	}

@@ -787,26 +787,46 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 			}
 			return
 		}
+		// Bound a peer's shared-file list before forwarding it to the UI: cap the
+		// number of entries and clamp the free-form strings so a hostile peer
+		// cannot bloat the dashboard with an enormous list or huge field values.
+		const (
+			maxContentListFiles = 10000
+			maxContentNameLen   = 256
+			maxContentDescLen   = 1024
+		)
+		clamp := func(s string, n int) string {
+			if len(s) > n {
+				return s[:n]
+			}
+			return s
+		}
+		truncated := false
 		out := make([]map[string]any, 0, len(files))
 		for _, f := range files {
+			if len(out) >= maxContentListFiles {
+				truncated = true
+				break
+			}
 			out = append(out, map[string]any{
 				"file_id":     f.FID.String(),
-				"filename":    f.Metadata.Filename,
+				"filename":    clamp(f.Metadata.Filename, maxContentNameLen),
 				"size":        f.Metadata.Size,
-				"directory":   f.Metadata.Directory,
-				"description": f.Metadata.Description,
+				"directory":   clamp(f.Metadata.Directory, maxContentNameLen),
+				"description": clamp(f.Metadata.Description, maxContentDescLen),
 				"cost":        f.Metadata.Cost,
 				"downloaded":  f.DiskPath != "",
 			})
 		}
-		nlog.Infof("Received %d shared files from %s", len(out), nick)
+		nlog.Infof("Received %d shared files from %s (truncated=%v)", len(out), nick, truncated)
 		if cfg.Notifs != nil {
 			cfg.Notifs.Publish(NotifEvent{
 				Type: "content-list-received",
 				Payload: map[string]any{
-					"uid":   uid.String(),
-					"nick":  nick,
-					"files": out,
+					"uid":       uid.String(),
+					"nick":      nick,
+					"files":     out,
+					"truncated": truncated,
 				},
 			})
 		}
