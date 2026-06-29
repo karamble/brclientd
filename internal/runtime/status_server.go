@@ -3039,6 +3039,11 @@ func (s *StatusServer) handleSendFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// progressChan is intentionally nil. In bisonrelay v0.2.4
+	// sendPreparedSendqItemListSync reports progress on each item's own channel
+	// (which SendFile leaves nil) rather than the channel passed here, so a
+	// non-nil channel makes the send block forever on the first chunk. brclient
+	// and bruig both pass nil for the same reason.
 	if err := c.SendFile(ru.ID(), 0, storedPath, nil); err != nil {
 		_ = os.Remove(storedPath)
 		http.Error(w, "send file: "+err.Error(), http.StatusBadGateway)
