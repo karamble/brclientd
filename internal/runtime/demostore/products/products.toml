@@ -1,0 +1,20 @@
+[[products]]
+  title = "The Ledger of Whispers"
+  sku = "dm0004"
+  description = "by Cass Nakamura\n\nIn a city where every transaction is watched, a courier smuggles the one ledger no one can read. A fictional demo title.\n"
+  tags = ["cypherpunk"]
+  price = 5.99
+
+[[products]]
+  title = "Ghosts in the Mempool"
+  sku = "dm0005"
+  description = "by R. T. Mole\n\nA rogue validator, a vanishing fortune, and a conspiracy buried in unconfirmed transactions. A fictional demo title.\n"
+  tags = ["cypherpunk"]
+  price = 6.50
+
+[[products]]
+  title = "Zero-Knowledge"
+  sku = "dm0006"
+  description = "by Vera Lumen\n\nShe can prove she knows the secret without ever revealing it. A fictional demo title.\n"
+  tags = ["cypherpunk"]
+  price = 7.99

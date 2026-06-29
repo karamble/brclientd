@@ -40,7 +40,36 @@ type storeProductsFile struct {
 
 var storeSKURE = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
+// storeTagRE bounds a category tag to a short label of letters/digits/spaces and
+// a few separators. Tags are interpolated into generated storefront templates
+// (section headings and `{{ if eq . "<tag>" }}` guards), so they must not carry
+// template or embed metacharacters such as { } [ ] " or =.
+var storeTagRE = regexp.MustCompile(`^[\p{L}\p{N} &.,'/+-]{1,48}$`)
+
+// storeFieldInjectionTokens are markup sequences that must never appear in a
+// product field, since the theme generator places title/tags into generated
+// template source. They would otherwise allow store template/embed injection
+// (and, via an absolute-path embed, arbitrary server-file read).
+var storeFieldInjectionTokens = []string{"--embed", "--form", "{{", "}}"}
+
 const storeProductsFilename = "products.toml"
+
+// validateProductContent rejects product titles/tags that could inject into the
+// generated storefront templates. Description is rendered as a template data
+// value (escaped at render), so it is not constrained here.
+func validateProductContent(p storeProduct) error {
+	for _, tok := range storeFieldInjectionTokens {
+		if strings.Contains(p.Title, tok) {
+			return fmt.Errorf("title may not contain %q", tok)
+		}
+	}
+	for _, t := range p.Tags {
+		if !storeTagRE.MatchString(t) {
+			return fmt.Errorf("tag %q must be 1-48 chars of letters, digits, spaces or & . , ' / + -", t)
+		}
+	}
+	return nil
+}
 
 func (s *storeController) productsDir() string {
 	return filepath.Join(s.storeDir, "products")
@@ -119,13 +148,18 @@ func (s *storeController) writeAllProducts(products []storeProduct) error {
 	return nil
 }
 
-// saveProduct upserts a product by SKU.
-func (s *storeController) saveProduct(p storeProduct) error {
+// saveProduct upserts a product by SKU. When create is true the SKU must not
+// already exist (so adding a product never silently overwrites an existing one);
+// when false it updates the matching product, or adds it if absent.
+func (s *storeController) saveProduct(p storeProduct, create bool) error {
 	if !storeSKURE.MatchString(p.SKU) {
 		return fmt.Errorf("sku must be 1-64 chars of letters, digits, dash or underscore")
 	}
 	if p.Title == "" {
 		return fmt.Errorf("title is required")
+	}
+	if err := validateProductContent(p); err != nil {
+		return err
 	}
 	products, err := s.listProducts()
 	if err != nil {
@@ -134,6 +168,9 @@ func (s *storeController) saveProduct(p storeProduct) error {
 	replaced := false
 	for i := range products {
 		if products[i].SKU == p.SKU {
+			if create {
+				return fmt.Errorf("a product with SKU %q already exists", p.SKU)
+			}
 			products[i] = p
 			replaced = true
 			break
@@ -146,19 +183,38 @@ func (s *storeController) saveProduct(p storeProduct) error {
 }
 
 // saveStoreFile writes an uploaded file to relPath under the store dir
-// (creating parent dirs), returning the cleaned relative path. relPath is
-// sanitized to stay within the store dir. These are the files products
-// reference via SendFilename for digital delivery on payment.
-func (s *storeController) saveStoreFile(relPath string, src io.Reader) (string, error) {
-	rel := strings.TrimPrefix(filepath.Clean("/"+strings.TrimSpace(relPath)), "/")
-	if rel == "" || strings.Contains(rel, "..") {
-		return "", fmt.Errorf("invalid file path")
+// (creating parent dirs), returning the cleaned relative path. The path is
+// gated by validateStoreMediaRel (no templates, no operational dirs, no
+// traversal). When overwrite is false an existing file is left untouched and an
+// error returned, so an upload never silently clobbers a cover/download/banner.
+// A pre-existing symlink at the target is refused so a write can't be redirected
+// out of the store dir. These are the files products reference via SendFilename
+// for digital delivery on payment, plus cover images and the header banner.
+func (s *storeController) saveStoreFile(relPath string, overwrite bool, src io.Reader) (string, error) {
+	rel, err := s.validateStoreMediaRel(relPath)
+	if err != nil {
+		return "", err
 	}
 	full := filepath.Join(s.storeDir, rel)
+	if fi, err := os.Lstat(full); err == nil {
+		if fi.Mode()&os.ModeSymlink != 0 {
+			return "", fmt.Errorf("refusing to write through a symlink")
+		}
+		if !overwrite {
+			return "", fmt.Errorf("file already exists: %s", rel)
+		}
+	}
 	if err := os.MkdirAll(filepath.Dir(full), 0o700); err != nil {
 		return "", err
 	}
-	f, err := os.Create(full)
+	// O_EXCL on create closes the create-time TOCTOU/symlink window; O_TRUNC is
+	// only used when the caller explicitly opted into overwriting an existing
+	// regular file (verified above).
+	flags := os.O_WRONLY | os.O_CREATE | os.O_EXCL
+	if overwrite {
+		flags = os.O_WRONLY | os.O_CREATE | os.O_TRUNC
+	}
+	f, err := os.OpenFile(full, flags, 0o644)
 	if err != nil {
 		return "", err
 	}

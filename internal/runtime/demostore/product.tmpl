@@ -1,0 +1,19 @@
+# {{ .Title }}
+
+{{ template "cover" . }}
+
+{{ .Description }}
+
+Price: {{ printf "$%.2f USD" .Price }}
+
+---
+## Add to Cart
+--form--
+type="action" value="/addToCart"
+type="hidden" name="sku" value="{{.SKU}}"
+type="intinput" label="Quantity" name="qty" value="1"
+type="submit" label="Add To Cart"
+--/form--
+---
+
+[Back to the index](/)  [Cart](/cart)  [Orders](/orders)

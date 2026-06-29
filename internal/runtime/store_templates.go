@@ -17,6 +17,32 @@ import (
 // templates live directly in the store root (no subdirectories).
 var storeTemplateNameRE = regexp.MustCompile(`^[A-Za-z0-9_.-]+\.tmpl$`)
 
+var (
+	storeEmbedRE      = regexp.MustCompile(`--embed\[([^\]]*)\]--`)
+	storeLocalFnArgRE = regexp.MustCompile(`(?:^|,)\s*localfilename=([^,]*)`)
+)
+
+// templateHasUnsafeEmbed reports whether template content contains an embed
+// whose localfilename escapes the store dir (absolute path or ".."). The store's
+// ProcessEmbeds inlines that file's bytes into served pages, so a stored
+// template could otherwise read arbitrary server files (wallet keys, /etc, ...).
+// We block it at write time since ProcessEmbeds itself lives in the pinned BR
+// library.
+func templateHasUnsafeEmbed(content string) bool {
+	for _, m := range storeEmbedRE.FindAllStringSubmatch(content, -1) {
+		for _, a := range storeLocalFnArgRE.FindAllStringSubmatch(m[1], -1) {
+			v := strings.TrimSpace(a[1])
+			if v == "" {
+				continue
+			}
+			if filepath.IsAbs(v) || strings.Contains(v, "..") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func validateTemplateName(name string) (string, bool) {
 	name = strings.TrimSpace(name)
 	if name == "" || strings.Contains(name, "..") ||
@@ -76,6 +102,9 @@ func (s *storeController) saveTemplate(name, content string) error {
 	n, ok := validateTemplateName(name)
 	if !ok {
 		return fmt.Errorf("template name must be letters, digits, dash, underscore or dot ending in .tmpl")
+	}
+	if templateHasUnsafeEmbed(content) {
+		return fmt.Errorf("template embeds may only reference files inside the store directory")
 	}
 	if err := os.MkdirAll(s.storeDir, 0o700); err != nil {
 		return err

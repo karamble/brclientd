@@ -173,6 +173,9 @@ func (s *StatusServer) Run(ctx context.Context) error {
 	mux.HandleFunc("/store/orders/status", s.handleStoreOrderStatus)
 	mux.HandleFunc("/store/orders/comment", s.handleStoreOrderComment)
 	mux.HandleFunc("/store/files/upload", s.handleStoreFileUpload)
+	mux.HandleFunc("/store/files/list", s.handleStoreFilesList)
+	mux.HandleFunc("/store/files/get", s.handleStoreFileGet)
+	mux.HandleFunc("/store/files/delete", s.handleStoreFileDelete)
 	mux.HandleFunc("/store/templates", s.handleStoreTemplates)
 	mux.HandleFunc("/store/templates/file", s.handleStoreTemplateFile)
 	mux.HandleFunc("/store/templates/save", s.handleStoreTemplateSave)
@@ -1792,12 +1795,15 @@ func (s *StatusServer) handleStoreProducts(w http.ResponseWriter, r *http.Reques
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"products": products})
 	case http.MethodPost:
-		var p storeProduct
-		if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+		var body struct {
+			storeProduct
+			Create bool `json:"create"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		if err := ctrl.saveProduct(p); err != nil {
+		if err := ctrl.saveProduct(body.storeProduct, body.Create); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -1872,6 +1878,7 @@ func (s *StatusServer) handleStoreFileUpload(w http.ResponseWriter, r *http.Requ
 	}
 	defer r.MultipartForm.RemoveAll()
 	relPath := strings.TrimSpace(r.FormValue("path"))
+	overwrite := r.FormValue("overwrite") == "true"
 	file, header, err := r.FormFile("file")
 	if err != nil {
 		http.Error(w, "file part missing: "+err.Error(), http.StatusBadRequest)
@@ -1881,13 +1888,94 @@ func (s *StatusServer) handleStoreFileUpload(w http.ResponseWriter, r *http.Requ
 	if relPath == "" {
 		relPath = header.Filename
 	}
-	saved, err := ctrl.saveStoreFile(relPath, file)
+	// The cover (covers/<sku>.jpg) and header banner are display images shown to
+	// every customer; only allow image files at those destinations.
+	if isStoreImageSlot(relPath) && !isImageFilename(relPath) {
+		http.Error(w, "cover and banner must be image files (jpg, png, webp, gif)", http.StatusBadRequest)
+		return
+	}
+	saved, err := ctrl.saveStoreFile(relPath, overwrite, file)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"path": saved})
+}
+
+// handleStoreFilesList lists the user-managed media files under the store dir
+// (cover images, banner, digital-download goods) - everything except templates
+// and the operational subdirs.
+func (s *StatusServer) handleStoreFilesList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	ctrl := s.currentStoreController()
+	if ctrl == nil {
+		http.Error(w, "store controller not yet ready", http.StatusServiceUnavailable)
+		return
+	}
+	files, err := ctrl.listStoreFiles()
+	if err != nil {
+		http.Error(w, "list files: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"files": files})
+}
+
+// handleStoreFileGet streams one store file's bytes for preview/download.
+// Query: path.
+func (s *StatusServer) handleStoreFileGet(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	ctrl := s.currentStoreController()
+	if ctrl == nil {
+		http.Error(w, "store controller not yet ready", http.StatusServiceUnavailable)
+		return
+	}
+	data, mimeType, err := ctrl.readStoreFile(r.URL.Query().Get("path"))
+	if os.IsNotExist(err) {
+		http.Error(w, "file not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
+	}
+	w.Header().Set("Content-Type", mimeType)
+	_, _ = w.Write(data)
+}
+
+// handleStoreFileDelete removes one media file under the store dir. Body: {path}.
+func (s *StatusServer) handleStoreFileDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	ctrl := s.currentStoreController()
+	if ctrl == nil {
+		http.Error(w, "store controller not yet ready", http.StatusServiceUnavailable)
+		return
+	}
+	var req struct {
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := ctrl.deleteStoreFile(req.Path); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleStoreTemplates lists the storefront's *.tmpl files (the Go templates

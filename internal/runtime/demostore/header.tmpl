@@ -1,0 +1,6 @@
+{{ define "header.tmpl" }}
+--embed[alt=The+Sovereign+Press,type=image/jpeg,localfilename=banner.jpg]--
+{{ if .IsAdmin -}}
+[Admin Area](/admin)
+{{ end -}}
+{{ end }}

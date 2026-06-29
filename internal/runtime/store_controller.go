@@ -181,8 +181,18 @@ func (s *storeController) enablePagesLocked() error {
 }
 
 func (s *storeController) enableStoreLocked() error {
-	if err := simplestore.WriteTemplate(s.storeDir); err != nil && !errors.Is(err, os.ErrExist) {
-		return fmt.Errorf("write simplestore template: %w", err)
+	// WriteTemplate returns nil when it seeds a fresh (empty) store dir and
+	// os.ErrExist when a store already exists. On a fresh seed, overlay the
+	// dcrpulse themed demo (replacing the bare simplestore sample); never touch
+	// an existing store.
+	werr := simplestore.WriteTemplate(s.storeDir)
+	if werr != nil && !errors.Is(werr, os.ErrExist) {
+		return fmt.Errorf("write simplestore template: %w", werr)
+	}
+	if werr == nil {
+		if err := seedDemoStore(s.storeDir); err != nil {
+			return fmt.Errorf("seed demo store: %w", err)
+		}
 	}
 	payType := s.mode.PayType
 	if payType == "" {

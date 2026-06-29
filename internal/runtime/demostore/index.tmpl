@@ -1,0 +1,13 @@
+{{ template "header.tmpl" . }}
+
+_A demonstration storefront. Every title here is fictional, generated to show off the dcrpulse storefront._
+
+--grid--
+{{ range $p := .Products }}
+{{ template "cover" $p }}
+**[{{ $p.Title }}](product/{{ $p.SKU }})**
+{{ printf "$%.2f USD" $p.Price }}
+{{ end }}
+--/grid--
+
+{{ template "footer.tmpl" . }}
