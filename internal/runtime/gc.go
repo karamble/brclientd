@@ -417,6 +417,20 @@ func (s *StatusServer) handleGCHistory(w http.ResponseWriter, r *http.Request, g
 		http.Error(w, "read gc log: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// Apply active content filters to served history. The BR library filters GC
+	// messages only on the live receive path, so messages stored before a rule
+	// was added remain in the log; drop matches here. PMLogEntry carries no
+	// sender uid, so use the zero uid: global/gc-scoped rules still match on
+	// content (uid-scoped rules are skipped, a safe no-op).
+	var zeroUID clientintf.UserID
+	filtered := entries[:0]
+	for _, e := range entries {
+		if ok, _ := c.FilterGCM(zeroUID, gcid, e.Message); ok {
+			continue
+		}
+		filtered = append(filtered, e)
+	}
+	entries = filtered
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(struct {
 		GCID     string                `json:"gcid"`

@@ -313,6 +313,18 @@ func (s *StatusServer) handleHistoryPM(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "read pm log: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// Apply active content filters to served history (the dashboard renders it
+	// verbatim). FilterPM gets the conversation uid, so uid-scoped PM rules work.
+	if c := s.currentClient(); c != nil {
+		filtered := entries[:0]
+		for _, e := range entries {
+			if ok, _ := c.FilterPM(uid, e.Message); ok {
+				continue
+			}
+			filtered = append(filtered, e)
+		}
+		entries = filtered
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(struct {
 		UID      string                `json:"uid"`
