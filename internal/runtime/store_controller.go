@@ -214,6 +214,7 @@ func (s *storeController) enableStoreLocked() error {
 		OrderPlaced: func(order *simplestore.Order, msg string) {
 			s.publishOrder("store-order-placed", order, msg)
 			s.addOrderNote("New store order", order)
+			s.warnIfLNFellBack(order)
 		},
 		StatusChanged: func(order *simplestore.Order, msg string) {
 			s.publishOrder("store-order-status", order, msg)
@@ -269,6 +270,25 @@ func (s *storeController) addOrderNote(subject string, order *simplestore.Order)
 	}
 	detail := fmt.Sprintf("Order #%d for $%.2f from %s", uint64(order.ID), order.Total(), buyer)
 	s.notes.add("info", subject, detail, order.User.String())
+}
+
+// warnIfLNFellBack notifies the store owner when a Lightning-configured store
+// could not invoice an order and fell back to on-chain (e.g. not enough inbound
+// capacity). The bell note links to the Lightning channels page so the owner
+// can request an inbound channel.
+func (s *storeController) warnIfLNFellBack(order *simplestore.Order) {
+	if s.notes == nil || s.mode.PayType != "ln" || order.PayType == simplestore.PayTypeLN {
+		return
+	}
+	buyer := order.User.String()
+	if nick, err := s.client.UserNick(order.User); err == nil && nick != "" {
+		buyer = nick
+	}
+	detail := fmt.Sprintf("Order #%d from %s could not get a Lightning invoice "+
+		"(likely not enough inbound capacity) and fell back to an on-chain address. "+
+		"Request an inbound channel to receive Lightning payments.", uint64(order.ID), buyer)
+	s.notes.addLink("warn", "Lightning unavailable - order paid on-chain", detail,
+		order.User.String(), "/wallet/lightning/channels")
 }
 
 func (s *storeController) loadMode() (storeMode, bool) {

@@ -23,6 +23,7 @@ type brNote struct {
 	Subject  string    `json:"subject"`
 	Detail   string    `json:"detail"`
 	UID      string    `json:"uid,omitempty"`
+	Link     string    `json:"link,omitempty"`
 }
 
 const maxStoredNotes = 100
@@ -49,6 +50,11 @@ func newNotificationStore(dataDir string) *notificationStore {
 }
 
 func (s *notificationStore) add(severity, subject, detail, uid string) {
+	s.addLink(severity, subject, detail, uid, "")
+}
+
+// addLink is add with a dashboard route the bell can navigate to on click.
+func (s *notificationStore) addLink(severity, subject, detail, uid, link string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.notes = append(s.notes, brNote{
@@ -58,6 +64,7 @@ func (s *notificationStore) add(severity, subject, detail, uid string) {
 		Subject:  subject,
 		Detail:   detail,
 		UID:      uid,
+		Link:     link,
 	})
 	s.next++
 	if len(s.notes) > maxStoredNotes {
