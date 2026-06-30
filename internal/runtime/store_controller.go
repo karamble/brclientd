@@ -217,6 +217,11 @@ func (s *storeController) enableStoreLocked() error {
 			s.warnIfLNFellBack(order)
 		},
 		StatusChanged: func(order *simplestore.Order, msg string) {
+			// BR v0.2.4's invoiceExpired() marks expired orders StatusPaid
+			// (a copy of invoiceSettled; see cancelIfExpired). Intercept first.
+			if s.cancelIfExpired(order, msg) {
+				return
+			}
 			s.publishOrder("store-order-status", order, msg)
 			if order.Status == simplestore.StatusPaid {
 				s.addOrderNote("Store payment received", order)
