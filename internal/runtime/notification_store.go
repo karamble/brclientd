@@ -70,9 +70,36 @@ func (s *notificationStore) addLink(severity, subject, detail, uid, link string)
 	if len(s.notes) > maxStoredNotes {
 		s.notes = s.notes[len(s.notes)-maxStoredNotes:]
 	}
+	s.persistLocked()
+}
+
+// persistLocked writes the current notes to disk. The caller must hold s.mu.
+func (s *notificationStore) persistLocked() {
 	if data, err := json.MarshalIndent(s.notes, "", " "); err == nil {
 		_ = os.WriteFile(s.path, data, 0o600)
 	}
+}
+
+// delete removes the note with the given id, returning whether one was removed.
+func (s *notificationStore) delete(id int64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.notes {
+		if s.notes[i].ID == id {
+			s.notes = append(s.notes[:i], s.notes[i+1:]...)
+			s.persistLocked()
+			return true
+		}
+	}
+	return false
+}
+
+// clear removes all stored notes.
+func (s *notificationStore) clear() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.notes = nil
+	s.persistLocked()
 }
 
 // recent returns up to n notes, newest first.

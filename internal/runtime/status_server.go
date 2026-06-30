@@ -182,6 +182,8 @@ func (s *StatusServer) Run(ctx context.Context) error {
 	mux.HandleFunc("/store/templates/delete", s.handleStoreTemplateDelete)
 	mux.HandleFunc("/notifications", s.handleNotifications)
 	mux.HandleFunc("/notifications/recent", s.handleRecentNotifications)
+	mux.HandleFunc("/notifications/delete", s.handleDeleteNotification)
+	mux.HandleFunc("/notifications/clear", s.handleClearNotifications)
 	mux.HandleFunc("/version", s.handleVersion)
 	mux.HandleFunc("/public-identity", s.handlePublicIdentity)
 	mux.HandleFunc("/avatar", s.handleSetAvatar)
@@ -2867,6 +2869,39 @@ func (s *StatusServer) handleRecentNotifications(w http.ResponseWriter, r *http.
 	_ = json.NewEncoder(w).Encode(struct {
 		Notifications []brNote `json:"notifications"`
 	}{Notifications: s.Notes.recent(n)})
+}
+
+func (s *StatusServer) handleDeleteNotification(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.Notes == nil {
+		http.Error(w, "notification store not configured", http.StatusServiceUnavailable)
+		return
+	}
+	var req struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	s.Notes.delete(req.ID)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *StatusServer) handleClearNotifications(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.Notes == nil {
+		http.Error(w, "notification store not configured", http.StatusServiceUnavailable)
+		return
+	}
+	s.Notes.clear()
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *StatusServer) handleNotifications(w http.ResponseWriter, r *http.Request) {
