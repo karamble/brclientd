@@ -846,14 +846,28 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 				truncated = true
 				break
 			}
+			// downloaded is BR's record-based "saved" signal; on_disk also
+			// confirms the file is still present (it may have been deleted via
+			// /downloads/delete) so the UI can offer a redownload.
+			onDisk := f.DiskPath != ""
+			if onDisk {
+				if _, err := os.Stat(f.DiskPath); err != nil {
+					onDisk = false
+				}
+			}
+			// filename and directory are attacker-controlled (a remote peer
+			// crafts the content-list reply). Reduce the filename to a safe
+			// basename via the same allowlist used for downloads, and drop the
+			// directory entirely - the list exposes only a safe filename, never a
+			// path that could carry traversal.
 			out = append(out, map[string]any{
 				"file_id":     f.FID.String(),
-				"filename":    clamp(f.Metadata.Filename, maxContentNameLen),
+				"filename":    sanitizeUploadName(f.Metadata.Filename),
 				"size":        f.Metadata.Size,
-				"directory":   clamp(f.Metadata.Directory, maxContentNameLen),
 				"description": clamp(f.Metadata.Description, maxContentDescLen),
 				"cost":        f.Metadata.Cost,
 				"downloaded":  f.DiskPath != "",
+				"on_disk":     onDisk,
 			})
 		}
 		nlog.Infof("Received %d shared files from %s (truncated=%v)", len(out), nick, truncated)
