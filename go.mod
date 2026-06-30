@@ -3,7 +3,7 @@ module github.com/karamble/brclientd
 go 1.26
 
 require (
-	github.com/companyzero/bisonrelay v0.2.4
+	github.com/companyzero/bisonrelay v0.2.5-0.20251216165537-8b1a3b4bd3d6
 	github.com/decred/dcrd/dcrutil/v4 v4.0.2
 	github.com/decred/dcrlnd v0.7.7-0.20250507095325-b1dd23fd5d7a
 	github.com/decred/go-socks v1.1.0

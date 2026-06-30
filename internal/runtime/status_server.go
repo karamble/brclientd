@@ -3051,12 +3051,37 @@ func (s *StatusServer) handleSendFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// progressChan is intentionally nil. In bisonrelay v0.2.4
-	// sendPreparedSendqItemListSync reports progress on each item's own channel
-	// (which SendFile leaves nil) rather than the channel passed here, so a
-	// non-nil channel makes the send block forever on the first chunk. brclient
-	// and bruig both pass nil for the same reason.
-	if err := c.SendFile(ru.ID(), 0, storedPath, nil); err != nil {
+	// Stream per-chunk relay-upload progress to live subscribers (the
+	// dashboard) while the send is in flight. BR's
+	// sendPreparedSendqItemListSync emits a SendProgress as the relay acks
+	// each sendq item (file metadata + every chunk); a draining goroutine
+	// forwards them as file-send-progress events. The progress channel was
+	// unusable until the upstream fix that landed after v0.2.4.
+	progressChan := make(chan client.SendProgress, 16)
+	progressDone := make(chan struct{})
+	go func() {
+		defer close(progressDone)
+		for prog := range progressChan {
+			if s.Notifs == nil {
+				continue
+			}
+			s.Notifs.Publish(NotifEvent{
+				Type: "file-send-progress",
+				Payload: map[string]any{
+					"uid":      ru.ID().String(),
+					"nick":     ru.Nick(),
+					"filename": safeName,
+					"size":     header.Size,
+					"sent":     prog.Sent,
+					"total":    prog.Total,
+				},
+			})
+		}
+	}()
+	err = c.SendFile(ru.ID(), 0, storedPath, progressChan)
+	close(progressChan)
+	<-progressDone
+	if err != nil {
 		_ = os.Remove(storedPath)
 		http.Error(w, "send file: "+err.Error(), http.StatusBadGateway)
 		return

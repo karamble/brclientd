@@ -96,6 +96,8 @@ github.com/cockroachdb/logtags v0.0.0-20190617123548-eb05cc24525f h1:o/kfcElHqOi
 github.com/cockroachdb/logtags v0.0.0-20190617123548-eb05cc24525f/go.mod h1:i/u985jwjWRlyHXQbwatDASoW0RMlZ/3i9yJHE2xLkI=
 github.com/companyzero/bisonrelay v0.2.4 h1:fI2a2Sju94Jj9Dipe7JGhgquiUsHdqkLyQUk0rhrFf0=
 github.com/companyzero/bisonrelay v0.2.4/go.mod h1:Mub+FRhEukMyRFrrUjPhDKlIisWYEA6xvmtQhcXAlPs=
+github.com/companyzero/bisonrelay v0.2.5-0.20251216165537-8b1a3b4bd3d6 h1:H/Mn8jYKvwT5YJ3buTBWAUbJgTLW63bfQk67290NYqI=
+github.com/companyzero/bisonrelay v0.2.5-0.20251216165537-8b1a3b4bd3d6/go.mod h1:Mub+FRhEukMyRFrrUjPhDKlIisWYEA6xvmtQhcXAlPs=
 github.com/companyzero/gopus v0.0.1 h1:u84EXF3lZiWjUsKmf+0mShxsQF7dgZmkrlTAuoNjTOE=
 github.com/companyzero/gopus v0.0.1/go.mod h1:omndjAm61XYmtKSyBe3ulvpUNIEBwJazewUIVagmd9E=
 github.com/companyzero/sntrup4591761 v0.0.0-20220309191932-9e0f3af2f07a h1:clYxJ3Os0EQUKDDVU8M0oipllX0EkuFNBfhVQuIfyF0=
