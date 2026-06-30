@@ -163,6 +163,7 @@ func (s *StatusServer) Run(ctx context.Context) error {
 	mux.HandleFunc("/shared-files/remove", s.handleSharedFileRemove)
 	mux.HandleFunc("/downloads", s.handleDownloads)
 	mux.HandleFunc("/downloads/cancel", s.handleDownloadCancel)
+	mux.HandleFunc("/downloads/delete", s.handleDownloadDelete)
 	mux.HandleFunc("/content/get", s.handleContentGet)
 	mux.HandleFunc("/content/file", s.handleContentFile)
 	mux.HandleFunc("/rates", s.handleRates)
@@ -1444,7 +1445,7 @@ func (s *StatusServer) handleDownloads(w http.ResponseWriter, r *http.Request) {
 		TotalChunks   int    `json:"total_chunks"`
 		MissingChunks int    `json:"missing_chunks"`
 		DiskPath      string `json:"disk_path"`
-		IsSent        bool   `json:"is_sent"`
+		Pushed        bool   `json:"pushed"`
 	}
 	out := make([]entry, 0, len(downloads))
 	for _, d := range downloads {
@@ -1466,6 +1467,14 @@ func (s *StatusServer) handleDownloads(w http.ResponseWriter, r *http.Request) {
 				missing++
 			}
 		}
+		// Drop completed downloads whose file is gone from disk (e.g. deleted
+		// via /downloads/delete) so a stale row doesn't linger pointing at a
+		// missing file.
+		if missing == 0 && d.DiskPath != "" {
+			if _, statErr := os.Stat(d.DiskPath); statErr != nil {
+				continue
+			}
+		}
 		// Nick lookup: a contact removed mid-transfer would return
 		// userNotFoundError; in that case we fall back to the UID.
 		nick := c.UserLogNick(d.UID)
@@ -1478,7 +1487,11 @@ func (s *StatusServer) handleDownloads(w http.ResponseWriter, r *http.Request) {
 			TotalChunks:   total,
 			MissingChunks: missing,
 			DiskPath:      d.DiskPath,
-			IsSent:        d.IsSentFile,
+			// d.IsSentFile is BR's "uploader-pushed this to me" flag, not "I sent
+			// it" - every ListDownloads entry is a file this node RECEIVED (an
+			// outgoing SendFile creates no download record). Expose it as `pushed`
+			// so the UI does not mislabel a received push as "sending".
+			Pushed: d.IsSentFile,
 		})
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -1512,6 +1525,74 @@ func (s *StatusServer) handleDownloadCancel(w http.ResponseWriter, r *http.Reque
 	}
 	if err := c.CancelDownload(fid); err != nil {
 		http.Error(w, "cancel download: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleDownloadDelete removes a completed download's file from disk (received
+// or sent - both live under <dataDir>/downloads/<nick>/). The file is addressed
+// by FID (+ optional UID), never by a client-supplied path: the path comes from
+// the matching download record's DiskPath, which is then verified to resolve
+// inside the downloads root before removal, so a request can never reach a file
+// outside <dataDir>/downloads (e.g. shared content under db/content, which Bison
+// Relay manages via unshare, stays untouchable). Body: {fid, uid?}.
+func (s *StatusServer) handleDownloadDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	c := s.currentClient()
+	if c == nil {
+		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
+		return
+	}
+	var req struct {
+		FID string `json:"fid"`
+		UID string `json:"uid"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	fidStr := strings.TrimSpace(req.FID)
+	uidStr := strings.TrimSpace(req.UID)
+	if fidStr == "" {
+		http.Error(w, "fid is required", http.StatusBadRequest)
+		return
+	}
+	downloads, err := c.ListDownloads()
+	if err != nil {
+		http.Error(w, "list downloads: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// Resolve the on-disk path the SAME way handleContentFile does: by matching
+	// the recorded download, never from request input.
+	var diskPath string
+	for _, d := range downloads {
+		if d.FID.String() != fidStr {
+			continue
+		}
+		if uidStr != "" && d.UID.String() != uidStr {
+			continue
+		}
+		diskPath = d.DiskPath
+		break
+	}
+	if diskPath == "" {
+		http.Error(w, "no completed download for that file", http.StatusNotFound)
+		return
+	}
+	// Defense in depth: even though DiskPath is brclientd's own value, require it
+	// to live strictly inside the downloads root before removing anything.
+	root := filepath.Clean(identity.PathsIn(s.DataDir).DownloadsRoot)
+	clean := filepath.Clean(diskPath)
+	if clean == root || !strings.HasPrefix(clean, root+string(filepath.Separator)) {
+		http.Error(w, "refusing to delete outside the downloads directory", http.StatusForbidden)
+		return
+	}
+	if err := os.Remove(clean); err != nil && !os.IsNotExist(err) {
+		http.Error(w, "delete file: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
