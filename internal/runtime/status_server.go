@@ -81,6 +81,9 @@ type StatusServer struct {
 
 	storeCtrlMu sync.RWMutex
 	storeCtrl   *storeController
+
+	lnPayMu sync.RWMutex
+	lnPay   *client.DcrlnPaymentClient
 }
 
 // SetClient attaches a live *client.Client to the StatusServer once the BR
@@ -98,6 +101,50 @@ func (s *StatusServer) SetStoreController(ctrl *storeController) {
 	s.storeCtrlMu.Lock()
 	defer s.storeCtrlMu.Unlock()
 	s.storeCtrl = ctrl
+}
+
+// SetLNPay wires the dcrlnd payment client so /downloads can decode the
+// per-chunk invoices a paid download was bought with into a paid-amount total.
+func (s *StatusServer) SetLNPay(pc *client.DcrlnPaymentClient) {
+	s.lnPayMu.Lock()
+	defer s.lnPayMu.Unlock()
+	s.lnPay = pc
+}
+
+func (s *StatusServer) currentLNPay() *client.DcrlnPaymentClient {
+	s.lnPayMu.RLock()
+	defer s.lnPayMu.RUnlock()
+	return s.lnPay
+}
+
+// invoiceAtomsCache memoizes decoded bolt11 invoice amounts (invoices are
+// immutable) so /downloads does not re-hit dcrlnd for the same chunk invoices.
+var (
+	invoiceAtomsMu    sync.Mutex
+	invoiceAtomsCache = map[string]int64{}
+)
+
+// invoiceAtoms decodes a bolt11 invoice to its atom amount (cached). Returns 0
+// on any decode error so the list never fails on a single undecodable invoice.
+func (s *StatusServer) invoiceAtoms(ctx context.Context, pc *client.DcrlnPaymentClient, invoice string) int64 {
+	if invoice == "" {
+		return 0
+	}
+	invoiceAtomsMu.Lock()
+	a, ok := invoiceAtomsCache[invoice]
+	invoiceAtomsMu.Unlock()
+	if ok {
+		return a
+	}
+	dec, err := pc.DecodeInvoice(ctx, invoice)
+	if err != nil {
+		return 0
+	}
+	atoms := dec.MAtoms / 1000
+	invoiceAtomsMu.Lock()
+	invoiceAtomsCache[invoice] = atoms
+	invoiceAtomsMu.Unlock()
+	return atoms
 }
 
 func (s *StatusServer) currentStoreController() *storeController {
@@ -1446,16 +1493,21 @@ func (s *StatusServer) handleDownloads(w http.ResponseWriter, r *http.Request) {
 		MissingChunks int    `json:"missing_chunks"`
 		DiskPath      string `json:"disk_path"`
 		Pushed        bool   `json:"pushed"`
+		Description   string `json:"description,omitempty"`
+		Cost          uint64 `json:"cost,omitempty"`
+		PaidAtoms     int64  `json:"paid_atoms,omitempty"`
 	}
 	out := make([]entry, 0, len(downloads))
 	for _, d := range downloads {
-		var filename string
-		var size uint64
+		var filename, description string
+		var size, cost uint64
 		var total int
 		if d.Metadata != nil {
 			filename = d.Metadata.Filename
 			size = d.Metadata.Size
 			total = len(d.Metadata.Manifest)
+			description = d.Metadata.Description
+			cost = d.Metadata.Cost
 		}
 		// A chunk we've stored locally lands in ChunkStateDownloaded
 		// (incoming) or ChunkStateUploaded (outgoing). Anything else
@@ -1475,6 +1527,16 @@ func (s *StatusServer) handleDownloads(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 		}
+		// Sum what we actually paid for this file by decoding the per-chunk
+		// invoices we paid (cached; immutable). 0 for free / pushed files.
+		var paidAtoms int64
+		if len(d.Invoices) > 0 {
+			if pc := s.currentLNPay(); pc != nil {
+				for _, inv := range d.Invoices {
+					paidAtoms += s.invoiceAtoms(r.Context(), pc, inv)
+				}
+			}
+		}
 		// Nick lookup: a contact removed mid-transfer would return
 		// userNotFoundError; in that case we fall back to the UID.
 		nick := c.UserLogNick(d.UID)
@@ -1491,7 +1553,10 @@ func (s *StatusServer) handleDownloads(w http.ResponseWriter, r *http.Request) {
 			// it" - every ListDownloads entry is a file this node RECEIVED (an
 			// outgoing SendFile creates no download record). Expose it as `pushed`
 			// so the UI does not mislabel a received push as "sending".
-			Pushed: d.IsSentFile,
+			Pushed:      d.IsSentFile,
+			Description: description,
+			Cost:        cost,
+			PaidAtoms:   paidAtoms,
 		})
 	}
 	w.Header().Set("Content-Type", "application/json")

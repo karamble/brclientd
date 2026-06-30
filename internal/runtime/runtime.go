@@ -184,6 +184,7 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 	statusSrv.SetClient(c)
+	statusSrv.SetLNPay(dcrlndPay)
 
 	// Auto-archive contacts unheard past the configured threshold.
 	g.Go(func() error { return groupsSweeper(gctx, c, groups, notifs) })
