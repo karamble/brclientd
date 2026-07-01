@@ -95,7 +95,7 @@ func Run(ctx context.Context, cfg Config) error {
 	notes := newNotificationStore(cfg.DataDir)
 	brSettings := newBRSettingsStore(cfg.DataDir)
 	groups := newContactGroupsStore(cfg.DataDir)
-	effectiveSRR := brSettings.sendReceiveReceipts()
+	effectiveBehavior := brSettings.behavior()
 	restartCh := make(chan struct{})
 
 	g, gctx := errgroup.WithContext(ctx)
@@ -107,28 +107,28 @@ func Run(ctx context.Context, cfg Config) error {
 	// 7676 in the no-identity case and would conflict with an early
 	// clientrpc bind.
 	statusSrv := &StatusServer{
-		Log:          cfg.LogFn("STAT"),
-		Certs:        cfg.Certs,
-		Listen:       cfg.StatusListen,
-		Tracker:      tracker,
-		DB:           cfg.DB,
-		UploadDir:    cfg.UploadDir,
-		MsgsRoot:     cfg.MsgsRoot,
-		EmbedsRoot:   cfg.EmbedsRoot,
-		Notifs:       notifs,
-		AudioRouter:  audioRouter,
-		Reinvites:    reinvites,
-		Unrepl:       unrepl,
-		DownloadCaps: downloadCaps,
-		Notes:        notes,
-		Groups:       groups,
-		Settings:     brSettings,
-		SRREffective: effectiveSRR,
-		RestartCh:    restartCh,
-		PagesDir:     cfg.PagesDir,
-		DataDir:      cfg.DataDir,
-		AppName:      cfg.AppName,
-		AppVersion:   cfg.AppVersion,
+		Log:               cfg.LogFn("STAT"),
+		Certs:             cfg.Certs,
+		Listen:            cfg.StatusListen,
+		Tracker:           tracker,
+		DB:                cfg.DB,
+		UploadDir:         cfg.UploadDir,
+		MsgsRoot:          cfg.MsgsRoot,
+		EmbedsRoot:        cfg.EmbedsRoot,
+		Notifs:            notifs,
+		AudioRouter:       audioRouter,
+		Reinvites:         reinvites,
+		Unrepl:            unrepl,
+		DownloadCaps:      downloadCaps,
+		Notes:             notes,
+		Groups:            groups,
+		Settings:          brSettings,
+		EffectiveBehavior: effectiveBehavior,
+		RestartCh:         restartCh,
+		PagesDir:          cfg.PagesDir,
+		DataDir:           cfg.DataDir,
+		AppName:           cfg.AppName,
+		AppVersion:        cfg.AppVersion,
 	}
 	g.Go(func() error { return statusSrv.Run(gctx) })
 
@@ -157,28 +157,28 @@ func Run(ctx context.Context, cfg Config) error {
 	storeProv := &switchableProvider{}
 
 	c, err := startBRClient(BRClientCfg{
-		DB:                  cfg.DB,
-		DcrlndPay:           dcrlndPay,
-		BRServer:            cfg.BRServer,
-		SeederCachePath:     cfg.SeederCachePath,
-		MsgsRoot:            cfg.MsgsRoot,
-		ProxyAddr:           cfg.ProxyAddr,
-		ProxyUser:           cfg.ProxyUser,
-		ProxyPass:           cfg.ProxyPass,
-		TorIsolation:        cfg.TorIsolation,
-		CircuitLimit:        cfg.CircuitLimit,
-		Tracker:             tracker,
-		Notifs:              notifs,
-		AudioRouter:         audioRouter,
-		Reinvites:           reinvites,
-		Unrepl:              unrepl,
-		DownloadCaps:        downloadCaps,
-		Notes:               notes,
-		Groups:              groups,
-		SendReceiveReceipts: effectiveSRR,
-		LogFn:               cfg.LogFn,
-		IdentityChan:        identityChan,
-		ResProvider:         storeProv,
+		DB:              cfg.DB,
+		DcrlndPay:       dcrlndPay,
+		BRServer:        cfg.BRServer,
+		SeederCachePath: cfg.SeederCachePath,
+		MsgsRoot:        cfg.MsgsRoot,
+		ProxyAddr:       cfg.ProxyAddr,
+		ProxyUser:       cfg.ProxyUser,
+		ProxyPass:       cfg.ProxyPass,
+		TorIsolation:    cfg.TorIsolation,
+		CircuitLimit:    cfg.CircuitLimit,
+		Tracker:         tracker,
+		Notifs:          notifs,
+		AudioRouter:     audioRouter,
+		Reinvites:       reinvites,
+		Unrepl:          unrepl,
+		DownloadCaps:    downloadCaps,
+		Notes:           notes,
+		Groups:          groups,
+		Behavior:        effectiveBehavior,
+		LogFn:           cfg.LogFn,
+		IdentityChan:    identityChan,
+		ResProvider:     storeProv,
 	})
 	if err != nil {
 		return err
