@@ -56,15 +56,16 @@ type StatusServer struct {
 	AppName      string
 	AppVersion   string
 
-	// Settings persists dashboard-changeable daemon settings; SRREffective is
-	// the send-receive-receipts value this process booted with (fixed at BR
-	// client construction). RestartCh is closed by requestRestart to make Run
-	// return ErrRestartRequested so the supervisor relaunches the daemon with
-	// the persisted settings.
-	Settings     *brSettingsStore
-	SRREffective bool
-	RestartCh    chan struct{}
-	restartOnce  sync.Once
+	// Settings persists dashboard-changeable daemon settings; EffectiveBehavior
+	// is the resolved set of BR behavior values this process booted with (fixed
+	// at BR client construction), so /settings/behavior can flag saved values
+	// that differ and need a restart to take effect. RestartCh is closed by
+	// requestRestart to make Run return ErrRestartRequested so the supervisor
+	// relaunches the daemon with the persisted settings.
+	Settings          *brSettingsStore
+	EffectiveBehavior brBehavior
+	RestartCh         chan struct{}
+	restartOnce       sync.Once
 
 	clientMu sync.RWMutex
 	client   *client.Client
@@ -260,7 +261,7 @@ func (s *StatusServer) Run(ctx context.Context) error {
 	mux.HandleFunc("/pages/local/delete", s.handlePagesLocalDelete)
 	mux.HandleFunc("/backup", s.handleBackup)
 	mux.HandleFunc("/connection", s.handleConnection)
-	mux.HandleFunc("/settings/receivereceipts", s.handleReceiveReceipts)
+	mux.HandleFunc("/settings/behavior", s.handleBehavior)
 	mux.HandleFunc("/filters", s.handleFilters)
 	mux.HandleFunc("/filters/delete", s.handleDeleteFilter)
 	mux.HandleFunc("/posts/subscribe-all", s.handleSubscribeAllPosts)

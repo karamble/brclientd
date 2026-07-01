@@ -75,9 +75,9 @@ type BRClientCfg struct {
 	LogFn        func(subsys string) slog.Logger
 	IdentityChan <-chan *zkidentity.FullIdentity
 
-	// SendReceiveReceipts forwards into client.Config.SendReceiveReceipts:
-	// send receive receipts to post authors for received posts and comments.
-	SendReceiveReceipts bool
+	// Behavior is the resolved set of runtime-changeable BR behavior settings
+	// (settings.json with BR ship defaults applied) forwarded into client.Config.
+	Behavior brBehavior
 	// ResProvider is the resource provider bound at the client's root. The
 	// caller passes a switchableProvider the store controller flips between
 	// filesystem-hosted pages and a simplestore at runtime.
@@ -1488,26 +1488,38 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 		// fresh KX (updateAB && !oldUser) and defers to any prior
 		// PKXActionFetchPost. Matches brclient's default (autosubposts=1)
 		// and bruig's typical config.
-		AutoSubscribeToPosts: true,
-		SendReceiveReceipts:  cfg.SendReceiveReceipts,
+		AutoSubscribeToPosts: cfg.Behavior.AutoSubscribePosts,
+		SendReceiveReceipts:  cfg.Behavior.SendReceiveReceipts,
 
 		// Upstream parity (brclient defaults): compressed RMs cost less
 		// in relay push fees, periodic handshakes keep ratchets fresh,
 		// and contacts idle past the window are unsubscribed (each
 		// removal leaves an idle-unsubscribing trace in their thread).
 		// The ignore list mirrors brclient's well-known bots.
-		ReconnectDelay:              5 * time.Second,
-		CompressLevel:               4,
-		AutoHandshakeInterval:       21 * 24 * time.Hour,
-		AutoRemoveIdleUsersInterval: 60 * 24 * time.Hour,
-		AutoRemoveIdleUsersIgnoreList: []string{
-			"86abd31f2141b274196d481edd061a00ab7a56b61a31656775c8a590d612b966", // Oprah
-			"ad716557157c1f191d8b5f8c6757ea41af49de27dc619fc87f337ca85be325ee", // GC bot
-		},
+		ReconnectDelay:                time.Duration(cfg.Behavior.ReconnectSecs) * time.Second,
+		CompressLevel:                 cfg.Behavior.CompressLevel,
+		AutoHandshakeInterval:         time.Duration(cfg.Behavior.AutoHandshakeDays) * 24 * time.Hour,
+		AutoRemoveIdleUsersInterval:   time.Duration(cfg.Behavior.IdleRemoveDays) * 24 * time.Hour,
+		AutoRemoveIdleUsersIgnoreList: cfg.Behavior.IdleRemoveIgnore,
+		GCInviteExpiration:            time.Duration(cfg.Behavior.GCInviteDays) * 24 * time.Hour,
+
+		// Advanced tuning: message-queue, tip-retry, and key-exchange timings.
+		// Defaults match the client's own setDefaults, so an untouched install is
+		// unchanged.
+		GCMQMaxLifetime:              time.Duration(cfg.Behavior.GcmqMaxLifetimeSecs) * time.Second,
+		GCMQUpdtDelay:                time.Duration(cfg.Behavior.GcmqUpdateSecs) * time.Second,
+		GCMQInitialDelay:             time.Duration(cfg.Behavior.GcmqInitialSecs) * time.Second,
+		TipUserRestartDelay:          time.Duration(cfg.Behavior.TipRestartSecs) * time.Second,
+		TipUserReRequestInvoiceDelay: time.Duration(cfg.Behavior.TipRerequestHours) * time.Hour,
+		TipUserMaxLifetime:           time.Duration(cfg.Behavior.TipMaxLifetimeHours) * time.Hour,
+		TipUserPayRetryDelayFactor:   time.Duration(cfg.Behavior.TipPayRetrySecs) * time.Second,
+		RecentMediateIDThreshold:     time.Duration(cfg.Behavior.MediateCooldownDays) * 24 * time.Hour,
+		MaxAutoKXMediateIDRequests:   cfg.Behavior.MaxAutoMediate,
+		UnkxdWarningTimeout:          time.Duration(cfg.Behavior.UnkxdWarnHours) * time.Hour,
 
 		// Without this GetRTDTMessages always returns empty and in-call
 		// chat history cannot be served.
-		TrackRTDTChatMessages: true,
+		TrackRTDTChatMessages: cfg.Behavior.TrackRTDTChat,
 
 		// The cost advertised in a post embed is advisory; the host invoices
 		// from the cost stored on its share, which only arrives with the

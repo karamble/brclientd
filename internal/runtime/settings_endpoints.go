@@ -79,42 +79,31 @@ func (s *StatusServer) handleConnection(w http.ResponseWriter, r *http.Request) 
 	}
 }
 
-// handleReceiveReceipts reports (GET) or sets (POST {enabled}) whether the
-// daemon sends receive receipts to post authors for received posts and
-// comments. client.Config.SendReceiveReceipts is fixed at BR client
-// construction, so a changed value persists to settings.json and triggers a
-// clean exit; the container supervisor relaunches the daemon with the new
-// value.
-func (s *StatusServer) handleReceiveReceipts(w http.ResponseWriter, r *http.Request) {
-	c := s.currentClient()
-	if c == nil {
-		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
-		return
-	}
+// handleBehavior reports (GET) or updates (POST, partial) the runtime-changeable
+// Bison Relay behavior settings. These map to client.Config fields fixed at BR
+// client construction, so a POST persists to settings.json and does NOT restart;
+// the new values take effect on the next daemon restart. GET returns {saved,
+// effective} so the dashboard can flag settings whose saved value differs from
+// the value the running daemon booted with (a pending change).
+func (s *StatusServer) handleBehavior(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(struct {
-			Enabled bool `json:"enabled"`
-		}{Enabled: s.SRREffective})
+			Saved     brBehavior `json:"saved"`
+			Effective brBehavior `json:"effective"`
+		}{Saved: s.Settings.behavior(), Effective: s.EffectiveBehavior})
 	case http.MethodPost:
-		var req struct {
-			Enabled bool `json:"enabled"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		var u brBehaviorUpdate
+		if err := json.NewDecoder(r.Body).Decode(&u); err != nil {
 			http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		if err := s.Settings.setSendReceiveReceipts(req.Enabled); err != nil {
-			http.Error(w, "persist setting: "+err.Error(), http.StatusInternalServerError)
+		if err := s.Settings.applyBehavior(u); err != nil {
+			http.Error(w, "persist settings: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
-		if req.Enabled != s.SRREffective {
-			// The 204 is already written; the graceful shutdown in Run
-			// drains this handler before the listener closes.
-			s.requestRestart()
-		}
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
