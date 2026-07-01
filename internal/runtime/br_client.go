@@ -1496,12 +1496,26 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 		// and contacts idle past the window are unsubscribed (each
 		// removal leaves an idle-unsubscribing trace in their thread).
 		// The ignore list mirrors brclient's well-known bots.
-		ReconnectDelay:                5 * time.Second,
-		CompressLevel:                 4,
+		ReconnectDelay:                time.Duration(cfg.Behavior.ReconnectSecs) * time.Second,
+		CompressLevel:                 cfg.Behavior.CompressLevel,
 		AutoHandshakeInterval:         time.Duration(cfg.Behavior.AutoHandshakeDays) * 24 * time.Hour,
 		AutoRemoveIdleUsersInterval:   time.Duration(cfg.Behavior.IdleRemoveDays) * 24 * time.Hour,
 		AutoRemoveIdleUsersIgnoreList: cfg.Behavior.IdleRemoveIgnore,
 		GCInviteExpiration:            time.Duration(cfg.Behavior.GCInviteDays) * 24 * time.Hour,
+
+		// Advanced tuning: message-queue, tip-retry, and key-exchange timings.
+		// Defaults match the client's own setDefaults, so an untouched install is
+		// unchanged.
+		GCMQMaxLifetime:              time.Duration(cfg.Behavior.GcmqMaxLifetimeSecs) * time.Second,
+		GCMQUpdtDelay:                time.Duration(cfg.Behavior.GcmqUpdateSecs) * time.Second,
+		GCMQInitialDelay:             time.Duration(cfg.Behavior.GcmqInitialSecs) * time.Second,
+		TipUserRestartDelay:          time.Duration(cfg.Behavior.TipRestartSecs) * time.Second,
+		TipUserReRequestInvoiceDelay: time.Duration(cfg.Behavior.TipRerequestHours) * time.Hour,
+		TipUserMaxLifetime:           time.Duration(cfg.Behavior.TipMaxLifetimeHours) * time.Hour,
+		TipUserPayRetryDelayFactor:   time.Duration(cfg.Behavior.TipPayRetrySecs) * time.Second,
+		RecentMediateIDThreshold:     time.Duration(cfg.Behavior.MediateCooldownDays) * 24 * time.Hour,
+		MaxAutoKXMediateIDRequests:   cfg.Behavior.MaxAutoMediate,
+		UnkxdWarningTimeout:          time.Duration(cfg.Behavior.UnkxdWarnHours) * time.Hour,
 
 		// Without this GetRTDTMessages always returns empty and in-call
 		// chat history cannot be served.

@@ -23,6 +23,20 @@ type brSettings struct {
 	AutoHandshakeDays   *int      `json:"auto_handshake_days,omitempty"`
 	GCInviteDays        *int      `json:"gc_invite_days,omitempty"`
 	TrackRTDTChat       *bool     `json:"track_rtdt_chat,omitempty"`
+
+	// Advanced tuning (client.Config timing/level values).
+	CompressLevel       *int `json:"compress_level,omitempty"`
+	ReconnectSecs       *int `json:"reconnect_secs,omitempty"`
+	GcmqMaxLifetimeSecs *int `json:"gcmq_max_lifetime_secs,omitempty"`
+	GcmqUpdateSecs      *int `json:"gcmq_update_secs,omitempty"`
+	GcmqInitialSecs     *int `json:"gcmq_initial_secs,omitempty"`
+	TipRestartSecs      *int `json:"tip_restart_secs,omitempty"`
+	TipRerequestHours   *int `json:"tip_rerequest_hours,omitempty"`
+	TipMaxLifetimeHours *int `json:"tip_max_lifetime_hours,omitempty"`
+	TipPayRetrySecs     *int `json:"tip_pay_retry_secs,omitempty"`
+	MediateCooldownDays *int `json:"mediate_cooldown_days,omitempty"`
+	MaxAutoMediate      *int `json:"max_auto_mediate,omitempty"`
+	UnkxdWarnHours      *int `json:"unkxd_warn_hours,omitempty"`
 }
 
 // Defaults MUST match what Bison Relay ships (brclient/bruig) so an untouched
@@ -40,6 +54,21 @@ const (
 	// default: the dashboard's in-call chat history needs the client to store
 	// RTDT messages (client.Config.TrackRTDTChatMessages).
 	defaultTrackRTDTChat = true
+
+	// Advanced tuning defaults; MUST equal the client's setDefaults
+	// (client/client.go). 0 is not a disable here.
+	defaultCompressLevel       = 4
+	defaultReconnectSecs       = 5
+	defaultGcmqMaxLifetimeSecs = 10
+	defaultGcmqUpdateSecs      = 1
+	defaultGcmqInitialSecs     = 10
+	defaultTipRestartSecs      = 60
+	defaultTipRerequestHours   = 24
+	defaultTipMaxLifetimeHours = 72
+	defaultTipPayRetrySecs     = 12
+	defaultMediateCooldownDays = 7
+	defaultMaxAutoMediate      = 3
+	defaultUnkxdWarnHours      = 24
 )
 
 // defaultIdleRemoveIgnore mirrors brclient's well-known bots, which must not be
@@ -61,6 +90,19 @@ type brBehavior struct {
 	AutoHandshakeDays   int      `json:"autoHandshakeDays"`
 	GCInviteDays        int      `json:"gcInviteDays"`
 	TrackRTDTChat       bool     `json:"trackRtdtChat"`
+
+	CompressLevel       int `json:"compressLevel"`
+	ReconnectSecs       int `json:"reconnectSecs"`
+	GcmqMaxLifetimeSecs int `json:"gcmqMaxLifetimeSecs"`
+	GcmqUpdateSecs      int `json:"gcmqUpdateSecs"`
+	GcmqInitialSecs     int `json:"gcmqInitialSecs"`
+	TipRestartSecs      int `json:"tipRestartSecs"`
+	TipRerequestHours   int `json:"tipRerequestHours"`
+	TipMaxLifetimeHours int `json:"tipMaxLifetimeHours"`
+	TipPayRetrySecs     int `json:"tipPayRetrySecs"`
+	MediateCooldownDays int `json:"mediateCooldownDays"`
+	MaxAutoMediate      int `json:"maxAutoMediate"`
+	UnkxdWarnHours      int `json:"unkxdWarnHours"`
 }
 
 // brBehaviorUpdate is the partial POST body: only non-nil fields are changed.
@@ -72,6 +114,19 @@ type brBehaviorUpdate struct {
 	AutoHandshakeDays   *int      `json:"autoHandshakeDays,omitempty"`
 	GCInviteDays        *int      `json:"gcInviteDays,omitempty"`
 	TrackRTDTChat       *bool     `json:"trackRtdtChat,omitempty"`
+
+	CompressLevel       *int `json:"compressLevel,omitempty"`
+	ReconnectSecs       *int `json:"reconnectSecs,omitempty"`
+	GcmqMaxLifetimeSecs *int `json:"gcmqMaxLifetimeSecs,omitempty"`
+	GcmqUpdateSecs      *int `json:"gcmqUpdateSecs,omitempty"`
+	GcmqInitialSecs     *int `json:"gcmqInitialSecs,omitempty"`
+	TipRestartSecs      *int `json:"tipRestartSecs,omitempty"`
+	TipRerequestHours   *int `json:"tipRerequestHours,omitempty"`
+	TipMaxLifetimeHours *int `json:"tipMaxLifetimeHours,omitempty"`
+	TipPayRetrySecs     *int `json:"tipPayRetrySecs,omitempty"`
+	MediateCooldownDays *int `json:"mediateCooldownDays,omitempty"`
+	MaxAutoMediate      *int `json:"maxAutoMediate,omitempty"`
+	UnkxdWarnHours      *int `json:"unkxdWarnHours,omitempty"`
 }
 
 // brSettingsStore persists daemon settings the dashboard can change at runtime.
@@ -119,6 +174,19 @@ func (s *brSettingsStore) behavior() brBehavior {
 		AutoHandshakeDays:   defaultAutoHandshakeDays,
 		GCInviteDays:        defaultGCInviteDays,
 		TrackRTDTChat:       defaultTrackRTDTChat,
+
+		CompressLevel:       defaultCompressLevel,
+		ReconnectSecs:       defaultReconnectSecs,
+		GcmqMaxLifetimeSecs: defaultGcmqMaxLifetimeSecs,
+		GcmqUpdateSecs:      defaultGcmqUpdateSecs,
+		GcmqInitialSecs:     defaultGcmqInitialSecs,
+		TipRestartSecs:      defaultTipRestartSecs,
+		TipRerequestHours:   defaultTipRerequestHours,
+		TipMaxLifetimeHours: defaultTipMaxLifetimeHours,
+		TipPayRetrySecs:     defaultTipPayRetrySecs,
+		MediateCooldownDays: defaultMediateCooldownDays,
+		MaxAutoMediate:      defaultMaxAutoMediate,
+		UnkxdWarnHours:      defaultUnkxdWarnHours,
 	}
 	if cur.SendReceiveReceipts != nil {
 		b.SendReceiveReceipts = *cur.SendReceiveReceipts
@@ -140,6 +208,42 @@ func (s *brSettingsStore) behavior() brBehavior {
 	}
 	if cur.TrackRTDTChat != nil {
 		b.TrackRTDTChat = *cur.TrackRTDTChat
+	}
+	if cur.CompressLevel != nil {
+		b.CompressLevel = *cur.CompressLevel
+	}
+	if cur.ReconnectSecs != nil {
+		b.ReconnectSecs = *cur.ReconnectSecs
+	}
+	if cur.GcmqMaxLifetimeSecs != nil {
+		b.GcmqMaxLifetimeSecs = *cur.GcmqMaxLifetimeSecs
+	}
+	if cur.GcmqUpdateSecs != nil {
+		b.GcmqUpdateSecs = *cur.GcmqUpdateSecs
+	}
+	if cur.GcmqInitialSecs != nil {
+		b.GcmqInitialSecs = *cur.GcmqInitialSecs
+	}
+	if cur.TipRestartSecs != nil {
+		b.TipRestartSecs = *cur.TipRestartSecs
+	}
+	if cur.TipRerequestHours != nil {
+		b.TipRerequestHours = *cur.TipRerequestHours
+	}
+	if cur.TipMaxLifetimeHours != nil {
+		b.TipMaxLifetimeHours = *cur.TipMaxLifetimeHours
+	}
+	if cur.TipPayRetrySecs != nil {
+		b.TipPayRetrySecs = *cur.TipPayRetrySecs
+	}
+	if cur.MediateCooldownDays != nil {
+		b.MediateCooldownDays = *cur.MediateCooldownDays
+	}
+	if cur.MaxAutoMediate != nil {
+		b.MaxAutoMediate = *cur.MaxAutoMediate
+	}
+	if cur.UnkxdWarnHours != nil {
+		b.UnkxdWarnHours = *cur.UnkxdWarnHours
 	}
 	return b
 }
@@ -174,6 +278,42 @@ func (s *brSettingsStore) applyBehavior(u brBehaviorUpdate) error {
 	}
 	if u.TrackRTDTChat != nil {
 		cur.TrackRTDTChat = clearIfDefaultBool(*u.TrackRTDTChat, defaultTrackRTDTChat)
+	}
+	if u.CompressLevel != nil {
+		cur.CompressLevel = clearIfDefaultInt(*u.CompressLevel, defaultCompressLevel)
+	}
+	if u.ReconnectSecs != nil {
+		cur.ReconnectSecs = clearIfDefaultInt(*u.ReconnectSecs, defaultReconnectSecs)
+	}
+	if u.GcmqMaxLifetimeSecs != nil {
+		cur.GcmqMaxLifetimeSecs = clearIfDefaultInt(*u.GcmqMaxLifetimeSecs, defaultGcmqMaxLifetimeSecs)
+	}
+	if u.GcmqUpdateSecs != nil {
+		cur.GcmqUpdateSecs = clearIfDefaultInt(*u.GcmqUpdateSecs, defaultGcmqUpdateSecs)
+	}
+	if u.GcmqInitialSecs != nil {
+		cur.GcmqInitialSecs = clearIfDefaultInt(*u.GcmqInitialSecs, defaultGcmqInitialSecs)
+	}
+	if u.TipRestartSecs != nil {
+		cur.TipRestartSecs = clearIfDefaultInt(*u.TipRestartSecs, defaultTipRestartSecs)
+	}
+	if u.TipRerequestHours != nil {
+		cur.TipRerequestHours = clearIfDefaultInt(*u.TipRerequestHours, defaultTipRerequestHours)
+	}
+	if u.TipMaxLifetimeHours != nil {
+		cur.TipMaxLifetimeHours = clearIfDefaultInt(*u.TipMaxLifetimeHours, defaultTipMaxLifetimeHours)
+	}
+	if u.TipPayRetrySecs != nil {
+		cur.TipPayRetrySecs = clearIfDefaultInt(*u.TipPayRetrySecs, defaultTipPayRetrySecs)
+	}
+	if u.MediateCooldownDays != nil {
+		cur.MediateCooldownDays = clearIfDefaultInt(*u.MediateCooldownDays, defaultMediateCooldownDays)
+	}
+	if u.MaxAutoMediate != nil {
+		cur.MaxAutoMediate = clearIfDefaultInt(*u.MaxAutoMediate, defaultMaxAutoMediate)
+	}
+	if u.UnkxdWarnHours != nil {
+		cur.UnkxdWarnHours = clearIfDefaultInt(*u.UnkxdWarnHours, defaultUnkxdWarnHours)
 	}
 	return s.save(cur)
 }
