@@ -85,6 +85,9 @@ type StatusServer struct {
 
 	lnPayMu sync.RWMutex
 	lnPay   *client.DcrlnPaymentClient
+
+	mcpEngMu sync.Mutex
+	mcpEng   *mcpEngine
 }
 
 // SetClient attaches a live *client.Client to the StatusServer once the BR
@@ -262,6 +265,10 @@ func (s *StatusServer) Run(ctx context.Context) error {
 	mux.HandleFunc("/backup", s.handleBackup)
 	mux.HandleFunc("/connection", s.handleConnection)
 	mux.HandleFunc("/settings/behavior", s.handleBehavior)
+	mux.HandleFunc("/settings/mcpclient", s.handleMCPSettings)
+	mux.HandleFunc("/mcp/pending", s.handleMCPPending)
+	mux.HandleFunc("/mcp/pending/resolve", s.handleMCPPendingResolve)
+	mux.HandleFunc("/mcp/spend", s.handleMCPSpend)
 	mux.HandleFunc("/filters", s.handleFilters)
 	mux.HandleFunc("/filters/delete", s.handleDeleteFilter)
 	mux.HandleFunc("/posts/subscribe-all", s.handleSubscribeAllPosts)
