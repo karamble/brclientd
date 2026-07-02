@@ -270,8 +270,20 @@ func (s *StatusServer) handleFilters(w http.ResponseWriter, r *http.Request) {
 		}
 		// Validate here so user typos come back as 400 instead of the
 		// generic store error.
-		if _, err := regexp.Compile(req.Regexp); err != nil {
+		re, err := regexp.Compile(req.Regexp)
+		if err != nil {
 			http.Error(w, "invalid regexp: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		// The BR library applies filters on the live receive path, before
+		// notifications fire, so a rule matching MCP envelope frames would
+		// silently kill agent sessions (the MCP engine never sees the
+		// dropped replies). Envelopes are hidden from chat anyway, so such
+		// a rule has no legitimate use.
+		if !req.SkipPMs && re.MatchString(sampleMCPEnvelope) {
+			http.Error(w, "regexp matches MCP protocol frames (--mcp[...]--); "+
+				"filtering them would break MCP over Bison Relay, and they "+
+				"are already hidden from chat", http.StatusBadRequest)
 			return
 		}
 		cf := clientdb.ContentFilter{

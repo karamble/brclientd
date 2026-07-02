@@ -26,6 +26,7 @@ import (
 	"github.com/decred/dcrlnd/lnrpc"
 	"github.com/decred/go-socks/socks"
 	"github.com/decred/slog"
+	"github.com/karamble/brmcp"
 )
 
 // buildBRDownloadTag renders the inline download-chip tag the dashboard parses
@@ -1236,6 +1237,12 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 		// never invoked for history/backlog, so the dashboard can badge from this
 		// in-process event without the replay that ChatService.PMStream incurs.
 		ntfns.Register(client.OnPMNtfn(func(ru *client.RemoteUser, pm rpc.RMPrivateMessage, ts time.Time) {
+			// MCP envelope frames are agent protocol traffic handled by
+			// the MCP engine; they are not chat and must not badge the
+			// UI or unarchive contacts.
+			if brmcp.IsEnvelope(pm.Message) {
+				return
+			}
 			// A new message returns auto-archived (non-pinned) contacts
 			// to the regular list before the pm event is published.
 			if cfg.Groups != nil && cfg.Groups.maybeAutoUnarchive(ru.ID().String()) {

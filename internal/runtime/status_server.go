@@ -26,6 +26,7 @@ import (
 	"github.com/companyzero/bisonrelay/rpc"
 	"github.com/companyzero/bisonrelay/zkidentity"
 	"github.com/decred/slog"
+	"github.com/karamble/brmcp"
 
 	"github.com/karamble/brclientd/internal/certgen"
 	"github.com/karamble/brclientd/internal/identity"
@@ -373,16 +374,22 @@ func (s *StatusServer) handleHistoryPM(w http.ResponseWriter, r *http.Request) {
 	}
 	// Apply active content filters to served history (the dashboard renders it
 	// verbatim). FilterPM gets the conversation uid, so uid-scoped PM rules work.
-	if c := s.currentClient(); c != nil {
-		filtered := entries[:0]
-		for _, e := range entries {
+	// MCP envelope frames are agent protocol traffic, not chat; they are
+	// hidden unconditionally so no user filter is ever needed for them.
+	c := s.currentClient()
+	filtered := entries[:0]
+	for _, e := range entries {
+		if brmcp.IsEnvelope(e.Message) {
+			continue
+		}
+		if c != nil {
 			if ok, _ := c.FilterPM(uid, e.Message); ok {
 				continue
 			}
-			filtered = append(filtered, e)
 		}
-		entries = filtered
+		filtered = append(filtered, e)
 	}
+	entries = filtered
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(struct {
 		UID      string                `json:"uid"`
