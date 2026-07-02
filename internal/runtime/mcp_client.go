@@ -524,6 +524,15 @@ func (e *mcpEngine) passthrough(link *mcpBotLink, tool string) mcp.ToolHandler {
 		if req.Params != nil {
 			args = req.Params.Arguments
 		}
+		// One idempotency key per logical call: the transport retry and the
+		// post-payment re-issue reuse it, so the bot can never execute or
+		// charge the same call twice on a lost reply (brmcp deduplicates
+		// per caller and replays the recorded outcome).
+		var keyB [16]byte
+		if _, err := rand.Read(keyB[:]); err != nil {
+			return nil, err
+		}
+		callMeta := mcp.Meta{brmcp.CallKeyMetaKey: hex.EncodeToString(keyB[:])}
 		paid := false
 		for attempt := 0; ; attempt++ {
 			link.mu.Lock()
@@ -532,7 +541,7 @@ func (e *mcpEngine) passthrough(link *mcpBotLink, tool string) mcp.ToolHandler {
 			if err != nil {
 				return nil, err
 			}
-			res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: tool, Arguments: args})
+			res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: tool, Arguments: args, Meta: callMeta})
 			if err != nil {
 				// One transport-level retry on a fresh session.
 				link.mu.Lock()
