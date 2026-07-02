@@ -189,7 +189,7 @@ func Run(ctx context.Context, cfg Config) error {
 	// BR-MCP client: lets local MCP agents call tool services offered by
 	// Bison Relay bots (github.com/karamble/brmcp), with payments gated by
 	// the persisted settings. The listener only binds when enabled there.
-	mcpEng, err := newMCPEngine(gctx, c, dcrlndPay, cfg.DataDir, cfg.LogFn("MCPC"))
+	mcpEng, err := newMCPEngine(gctx, c, cfg.DataDir, cfg.LogFn("MCPC"))
 	if err != nil {
 		return err
 	}

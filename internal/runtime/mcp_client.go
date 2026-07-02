@@ -33,8 +33,11 @@ import (
 // by Bison Relay bots (see github.com/karamble/brmcp). brclientd exposes a
 // localhost streamable-HTTP MCP endpoint per bot (/mcp/<bot-uid>, bearer
 // gated, default disabled); each endpoint mirrors the remote bot's tools and
-// relays calls over the relay, settling paid tools by LN invoice or BR tip
-// under the user's caps, either automatically or after explicit approval.
+// relays calls over the relay, settling paid tools by Bison Relay tip under
+// the user's caps, either automatically or after explicit approval. The tip
+// is BR's native invoice exchange: this client requests an invoice from the
+// bot's client over the relay and pays it, so no raw invoice ever rides the
+// MCP layer.
 
 // mcpClientSettings is persisted as mcpclient.json in the data dir.
 type mcpClientSettings struct {
@@ -51,6 +54,10 @@ type mcpClientSettings struct {
 	AllowedBots []string `json:"allowed_bots"`
 	// ApprovalTimeoutSecs bounds how long a call waits for a decision.
 	ApprovalTimeoutSecs int `json:"approval_timeout_secs"`
+	// TipWaitSecs bounds how long a call waits for the tip payment to
+	// complete before giving up (the attempt itself keeps running in the
+	// BR client for up to 72h and still credits the bot when it lands).
+	TipWaitSecs int `json:"tip_wait_secs"`
 }
 
 func (s mcpClientSettings) withDefaults() mcpClientSettings {
@@ -62,6 +69,9 @@ func (s mcpClientSettings) withDefaults() mcpClientSettings {
 	}
 	if s.ApprovalTimeoutSecs <= 0 {
 		s.ApprovalTimeoutSecs = 120
+	}
+	if s.TipWaitSecs <= 0 {
+		s.TipWaitSecs = 180
 	}
 	return s
 }
@@ -82,7 +92,6 @@ type mcpPending struct {
 	Bot     string `json:"bot"`
 	Tool    string `json:"tool"`
 	Atoms   int64  `json:"atoms"`
-	Invoice string `json:"invoice,omitempty"`
 	Created int64  `json:"created"`
 
 	decision chan bool
@@ -95,6 +104,11 @@ func (p *mcpPending) decide(approve bool) {
 
 var mcpUIDRe = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
+// sampleMCPEnvelope is a representative brmcp wire frame; the content
+// filter endpoint refuses PM rules that match it (filtering envelope
+// frames severs MCP sessions at the receive path).
+const sampleMCPEnvelope = `--mcp[v=1,sid=0123456789abcdef,mid=0123456789abcdef,seq=1/1,exp=1783000000]--eyJqc29ucnBjIjoiMi4wIn0=`
+
 type mcpBotLink struct {
 	mu      sync.Mutex
 	uid     string
@@ -103,29 +117,38 @@ type mcpBotLink struct {
 	proxy   *mcp.Server
 }
 
+// tipWaiter parks one settle() until its tip attempt reaches a terminal
+// state. Waiters are keyed by (payee uid, milliatoms) and resolved FIFO;
+// two concurrent same-amount payments to the same bot may swap waiters,
+// which is harmless - both complete.
+type tipWaiter struct {
+	uid    string
+	matoms int64
+	done   chan error
+}
+
 type mcpEngine struct {
 	ctx     context.Context
 	c       *client.Client
-	pay     *client.DcrlnPaymentClient
 	log     slog.Logger
 	dataDir string
 
-	mu       sync.Mutex
-	settings mcpClientSettings
-	router   *brmcp.Router
-	bots     map[string]*mcpBotLink
-	pending  map[string]*mcpPending
-	spend    []mcpSpendEntry
-	httpSrv  *http.Server
+	mu         sync.Mutex
+	settings   mcpClientSettings
+	router     *brmcp.Router
+	bots       map[string]*mcpBotLink
+	pending    map[string]*mcpPending
+	spend      []mcpSpendEntry
+	httpSrv    *http.Server
+	tipWaiters []*tipWaiter
 }
 
-func newMCPEngine(ctx context.Context, c *client.Client, pay *client.DcrlnPaymentClient,
+func newMCPEngine(ctx context.Context, c *client.Client,
 	dataDir string, log slog.Logger) (*mcpEngine, error) {
 
 	e := &mcpEngine{
 		ctx:     ctx,
 		c:       c,
-		pay:     pay,
 		log:     log,
 		dataDir: dataDir,
 		bots:    make(map[string]*mcpBotLink),
@@ -145,6 +168,24 @@ func newMCPEngine(ctx context.Context, c *client.Client, pay *client.DcrlnPaymen
 	// ignored there, so normal messaging is unaffected.
 	c.NotificationManager().Register(client.OnPMNtfn(func(ru *client.RemoteUser, pm rpc.RMPrivateMessage, _ time.Time) {
 		e.router.HandlePM(ru.ID().String(), pm.Message)
+	}))
+	// Tip attempts are asynchronous in the BR client; settle() blocks on a
+	// waiter resolved by the terminal progress event. Non-terminal events
+	// (willRetry) are ignored, matching the reference clients.
+	c.NotificationManager().Register(client.OnTipAttemptProgressNtfn(func(ru *client.RemoteUser,
+		amtMAtoms int64, completed bool, attempt int, attemptErr error, willRetry bool) {
+
+		if willRetry {
+			return
+		}
+		var res error
+		if !completed {
+			res = attemptErr
+			if res == nil {
+				res = errors.New("tip attempt ended without completing")
+			}
+		}
+		e.resolveTipWaiter(ru.ID().String(), amtMAtoms, res)
 	}))
 	if e.settings.Enabled {
 		if err := e.startListenerLocked(); err != nil {
@@ -167,6 +208,40 @@ func (s mcpSender) SendPM(ctx context.Context, peer, text string) error {
 		return err
 	}
 	return s.e.c.PM(user.ID(), text)
+}
+
+func (e *mcpEngine) addTipWaiter(uid string, matoms int64) *tipWaiter {
+	w := &tipWaiter{uid: uid, matoms: matoms, done: make(chan error, 1)}
+	e.mu.Lock()
+	e.tipWaiters = append(e.tipWaiters, w)
+	e.mu.Unlock()
+	return w
+}
+
+func (e *mcpEngine) removeTipWaiter(w *tipWaiter) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for i, cand := range e.tipWaiters {
+		if cand == w {
+			e.tipWaiters = append(e.tipWaiters[:i], e.tipWaiters[i+1:]...)
+			return
+		}
+	}
+}
+
+// resolveTipWaiter completes the oldest waiter matching a terminal tip
+// progress event. Events with no waiter (chat tips, dashboard tips) are
+// simply not ours.
+func (e *mcpEngine) resolveTipWaiter(uid string, matoms int64, res error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for i, w := range e.tipWaiters {
+		if strings.EqualFold(w.uid, uid) && w.matoms == matoms {
+			e.tipWaiters = append(e.tipWaiters[:i], e.tipWaiters[i+1:]...)
+			w.done <- res
+			return
+		}
+	}
 }
 
 func (e *mcpEngine) botAllowed(uid string) bool {
@@ -516,9 +591,10 @@ func parsePaymentRequired(res *mcp.CallToolResult) *brmcp.PaymentRequired {
 	return nil
 }
 
-// settle pays one payment_required under the configured caps and mode.
-// Invoice settles synchronously and is preferred; the tip rail is the
-// fallback and credits asynchronously on the bot side.
+// settle pays one payment_required under the configured caps and mode via
+// the BR client's native tip flow (the client requests an invoice from the
+// bot over the relay, verifies the exact amount, and pays it), blocking
+// until the attempt reaches a terminal state or the wait budget runs out.
 func (e *mcpEngine) settle(ctx context.Context, bot, tool string, pr *brmcp.PaymentRequired) error {
 	atoms := pr.ShortfallAtoms
 	if atoms <= 0 {
@@ -542,41 +618,36 @@ func (e *mcpEngine) settle(ctx context.Context, bot, tool string, pr *brmcp.Paym
 			atoms, spentToday, s.PerDayCapAtoms)
 	}
 	if s.Mode == "approval" {
-		if err := e.awaitApproval(ctx, bot, tool, atoms, pr.Invoice,
+		if err := e.awaitApproval(ctx, bot, tool, atoms,
 			time.Duration(s.ApprovalTimeoutSecs)*time.Second); err != nil {
 			return err
 		}
-	}
-
-	if pr.Invoice != "" && e.pay != nil {
-		dec, err := e.pay.DecodeInvoice(ctx, pr.Invoice)
-		if err != nil {
-			return fmt.Errorf("decode invoice: %w", err)
-		}
-		// The invoice must ask exactly what the bot quoted; anything else
-		// is a mismatch we refuse rather than trust.
-		if dec.MAtoms != atoms*1000 {
-			return fmt.Errorf("invoice amount %d matoms != quoted %d atoms", dec.MAtoms, atoms)
-		}
-		if dec.IsExpired(0) {
-			return fmt.Errorf("invoice already expired")
-		}
-		if _, err := e.pay.PayInvoice(ctx, pr.Invoice); err != nil {
-			return fmt.Errorf("pay invoice: %w", err)
-		}
-		e.mu.Lock()
-		e.recordSpendLocked(bot, tool, "invoice", atoms)
-		e.mu.Unlock()
-		e.log.Infof("MCP paid %d atoms by invoice for %s/%s", atoms, bot[:8], tool)
-		return nil
 	}
 
 	user, err := e.c.UserByNick(bot)
 	if err != nil {
 		return err
 	}
-	if err := e.c.TipUser(user.ID(), dcrutil.Amount(atoms).ToCoin(), 3); err != nil {
+	// One attempt = one invoice request over the relay (like the reference
+	// clients); LN pay retries are nested inside with exponential backoff.
+	w := e.addTipWaiter(user.ID().String(), atoms*1000)
+	if err := e.c.TipUser(user.ID(), dcrutil.Amount(atoms).ToCoin(), 1); err != nil {
+		e.removeTipWaiter(w)
 		return fmt.Errorf("tip: %w", err)
+	}
+	select {
+	case err := <-w.done:
+		if err != nil {
+			return fmt.Errorf("tip failed: %w", err)
+		}
+	case <-time.After(time.Duration(s.TipWaitSecs) * time.Second):
+		e.removeTipWaiter(w)
+		return fmt.Errorf("tip not confirmed within %ds; the attempt keeps "+
+			"running in the background (up to 72h) and still credits the "+
+			"bot's balance for a later call", s.TipWaitSecs)
+	case <-ctx.Done():
+		e.removeTipWaiter(w)
+		return ctx.Err()
 	}
 	e.mu.Lock()
 	e.recordSpendLocked(bot, tool, "tip", atoms)
@@ -589,7 +660,7 @@ func (e *mcpEngine) settle(ctx context.Context, bot, tool string, pr *brmcp.Paym
 // decides through the dashboard, the timeout passes, or the call context
 // ends.
 func (e *mcpEngine) awaitApproval(ctx context.Context, bot, tool string, atoms int64,
-	invoice string, timeout time.Duration) error {
+	timeout time.Duration) error {
 
 	var idb [8]byte
 	if _, err := rand.Read(idb[:]); err != nil {
@@ -600,7 +671,6 @@ func (e *mcpEngine) awaitApproval(ctx context.Context, bot, tool string, atoms i
 		Bot:     bot,
 		Tool:    tool,
 		Atoms:   atoms,
-		Invoice: invoice,
 		Created: time.Now().Unix(),
 
 		decision: make(chan bool, 1),
