@@ -1,12 +1,14 @@
 # RPC glossary
 
-brclientd exposes two network surfaces. Both use TLS with the certificate
-triplet auto-generated at `<datadir>/rpc/` on first run.
+brclientd exposes three network surfaces. clientrpc and the status REST
+use TLS with the certificate triplet auto-generated at `<datadir>/rpc/`
+on first run; the MCP listener is plain HTTP guarded by a bearer token.
 
 | Surface | Default port | Protocol |
 | ------- | ------------ | -------- |
 | clientrpc | 7676 | JSON-RPC 2.0 over WebSocket at `/ws`, mTLS |
 | status REST | 7677 | HTTPS + JSON |
+| MCP client | 8891 | streamable HTTP (MCP), bearer token |
 
 This page is a glossary. It names every endpoint and what it does, not the
 request and response schemas.
@@ -214,6 +216,15 @@ config file).
 | `/filters` | list and save content filters |
 | `/filters/delete` | delete a content filter |
 
+### MCP client
+
+| Route | Purpose |
+| ----- | ------- |
+| `/settings/mcpclient` | MCP client settings: enable, token, mode, caps, allowed bots |
+| `/mcp/pending` | payments waiting for approval |
+| `/mcp/pending/resolve` | approve or deny a pending payment |
+| `/mcp/spend` | recorded payments and spend totals |
+
 ### Notifications
 
 | Route | Purpose |
@@ -228,3 +239,26 @@ config file).
 | Route | Purpose |
 | ----- | ------- |
 | `/rtdt/sessions`, `/rtdt/sessions/...` | realtime (RTDT) sessions: list, create, invite, accept, chat |
+
+## MCP client (port 8891)
+
+The BR-MCP client listener is a bridge between AI agents and tool
+services offered by Bison Relay bots (see
+[brmcp](https://github.com/karamble/brmcp)). The agent-facing side is
+standard MCP (Model Context Protocol) over the streamable HTTP
+transport, so it is fully compatible with any MCP-capable agent or
+client. Connecting takes nothing more than the endpoint URL and the
+bearer token; no Bison Relay specifics are required on the agent side.
+
+Each allowed bot gets its own endpoint at `/mcp/<bot-uid>`. The
+endpoint mirrors the remote bot's tools as ordinary MCP tools; calls
+are relayed over Bison Relay to the bot and the answers come back the
+same way. Paid tools settle as Bison Relay tips under the configured
+caps, automatically or after explicit approval. The agent never handles
+identity, transport, or payments; it just sees tools.
+
+Off by default. Requests must carry the bearer token from the settings.
+The listen address comes from the `[mcp options]` config section
+(`mcp.mcplisten`, default `127.0.0.1:8891`) and takes effect on restart;
+everything else is runtime configuration via `/settings/mcpclient` on
+the status REST.
