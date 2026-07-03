@@ -17,6 +17,8 @@ import (
 
 	"github.com/decred/dcrd/dcrutil/v4"
 	flags "github.com/jessevdk/go-flags"
+
+	"github.com/karamble/brclientd/sampleconfig"
 )
 
 const (
@@ -132,6 +134,16 @@ func Load(args []string, version string) (*Config, error) {
 	cfg.AppDataDir = pre.AppDataDir
 	cfg.ConfigFile = pre.ConfigFile
 
+	// Write a documented default config file the first time brclientd runs at
+	// its default location, matching dcrd. Skipped when the user pointed at a
+	// different path (--appdata/--configfile move ConfigFile off the default,
+	// e.g. the docker deployment) or on simnet; a failure is non-fatal.
+	if !pre.SimNet && cfg.ConfigFile == DefaultConfigFile && !fileExists(cfg.ConfigFile) {
+		if err := createDefaultConfigFile(cfg.ConfigFile); err != nil {
+			fmt.Fprintf(os.Stderr, "Error creating a default config file: %v\n", err)
+		}
+	}
+
 	parser := flags.NewParser(cfg, flags.HelpFlag|flags.PassDoubleDash)
 	if _, err := os.Stat(cfg.ConfigFile); err == nil {
 		if err := flags.NewIniParser(parser).ParseFile(cfg.ConfigFile); err != nil {
@@ -229,6 +241,30 @@ func cleanAndExpandPath(path string) string {
 		}
 	}
 	return filepath.Clean(os.ExpandEnv(path))
+}
+
+// fileExists reports whether the named path exists.
+func fileExists(name string) bool {
+	_, err := os.Stat(name)
+	return err == nil
+}
+
+// createDefaultConfigFile writes the documented sample configuration to
+// destPath, creating parent directories as needed. Unlike dcrd there is
+// nothing to inject (brclientd's clientrpc uses mTLS, not basic-auth
+// rpcuser/rpcpass), so the sample is written verbatim - every option is
+// commented at its default, so the resulting file changes no behavior.
+func createDefaultConfigFile(destPath string) error {
+	if err := os.MkdirAll(filepath.Dir(destPath), 0o700); err != nil {
+		return err
+	}
+	dest, err := os.OpenFile(destPath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	defer dest.Close()
+	_, err = dest.WriteString(sampleconfig.FileContents())
+	return err
 }
 
 func ensureDir(path string) error {

@@ -29,7 +29,10 @@ Default locations on Linux:
 ~/.brclientd/logs/<network>/brclientd.log
 ```
 
-See `sample-brclientd.conf` for a documented config template.
+On first run at the default location brclientd writes a documented
+`brclientd.conf` (every option commented at its default) into the application
+data directory, the same way dcrd does. See `sampleconfig/sample-brclientd.conf`
+for that template.
 
 Frequently used flags:
 
