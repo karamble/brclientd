@@ -88,6 +88,7 @@ func run(args []string) error {
 		Certs:             certs,
 		ClientRPCListen:   cfg.ClientRPC.Listen,
 		StatusListen:      cfg.Status.Listen,
+		MCPListen:         cfg.MCP.Listen,
 		AppName:           config.AppName,
 		AppVersion:        Version,
 		BRServer:          cfg.BRServer,

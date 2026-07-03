@@ -56,6 +56,15 @@ type StatusOptions struct {
 	Listen string `long:"listen" description:"Address the /status HTTP endpoint binds to (default: 0.0.0.0:7677)"`
 }
 
+// MCPOptions configure the MCP-over-Bison-Relay client listener (config
+// section `[mcp]`): a local streamable-HTTP endpoint that proxies paid MCP
+// tools from Bison Relay bots. Like dcrd's rpclisten, the listen address is an
+// operator/startup setting - default loopback, set to 0.0.0.0 to reach it from
+// the LAN. Not runtime-rebindable (restart to change).
+type MCPOptions struct {
+	Listen string `long:"mcplisten" description:"Address the MCP client listener binds to (default: 127.0.0.1:8891)"`
+}
+
 // SimpleStoreOptions configure the optional simplestore resource host (config
 // section `[simplestore]`). When Enabled, this node serves a store over the
 // relay instead of static pages (BR binds one resource provider at the root).
@@ -87,6 +96,7 @@ type Config struct {
 	Dcrlnd      DcrlndOptions      `group:"dcrlnd options" namespace:"dcrlnd"`
 	ClientRPC   ClientRPCOptions   `group:"clientrpc options" namespace:"clientrpc"`
 	Status      StatusOptions      `group:"status options" namespace:"status"`
+	MCP         MCPOptions         `group:"mcp options" namespace:"mcp"`
 	SimpleStore SimpleStoreOptions `group:"simplestore options" namespace:"simplestore"`
 }
 
@@ -187,6 +197,9 @@ func Load(args []string, version string) (*Config, error) {
 	}
 	if cfg.Status.Listen == "" {
 		cfg.Status.Listen = "0.0.0.0:" + DefaultStatusPort
+	}
+	if cfg.MCP.Listen == "" {
+		cfg.MCP.Listen = "127.0.0.1:8891"
 	}
 	if cfg.SimpleStore.PayType == "" {
 		cfg.SimpleStore.PayType = "ln"

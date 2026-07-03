@@ -39,10 +39,11 @@ import (
 // bot's client over the relay and pays it, so no raw invoice ever rides the
 // MCP layer.
 
-// mcpClientSettings is persisted as mcpclient.json in the data dir.
+// mcpClientSettings is persisted as mcpclient.json in the data dir. The listen
+// address is NOT here - it is startup config (config [mcp] mcplisten), not a
+// runtime setting, so it is never carried over the settings REST.
 type mcpClientSettings struct {
 	Enabled bool   `json:"enabled"`
-	Bind    string `json:"bind"`
 	Token   string `json:"token"`
 	// Mode is "approval" (every payment waits for a human decision) or
 	// "autopay" (payments under the caps run unattended).
@@ -61,9 +62,6 @@ type mcpClientSettings struct {
 }
 
 func (s mcpClientSettings) withDefaults() mcpClientSettings {
-	if s.Bind == "" {
-		s.Bind = "127.0.0.1:8891"
-	}
 	if s.Mode != "autopay" {
 		s.Mode = "approval"
 	}
@@ -132,6 +130,9 @@ type mcpEngine struct {
 	c       *client.Client
 	log     slog.Logger
 	dataDir string
+	// listen is the startup-configured listener address (config [mcp]
+	// mcplisten); fixed for the process lifetime, restart to change.
+	listen string
 
 	mu         sync.Mutex
 	settings   mcpClientSettings
@@ -144,13 +145,14 @@ type mcpEngine struct {
 }
 
 func newMCPEngine(ctx context.Context, c *client.Client,
-	dataDir string, log slog.Logger) (*mcpEngine, error) {
+	dataDir, listen string, log slog.Logger) (*mcpEngine, error) {
 
 	e := &mcpEngine{
 		ctx:     ctx,
 		c:       c,
 		log:     log,
 		dataDir: dataDir,
+		listen:  listen,
 		bots:    make(map[string]*mcpBotLink),
 		pending: make(map[string]*mcpPending),
 	}
@@ -365,7 +367,7 @@ func (e *mcpEngine) applySettings(s mcpClientSettings) error {
 		return e.startListenerLocked()
 	case !s.Enabled && e.httpSrv != nil:
 		e.stopListenerLocked()
-	case s.Enabled && (s.Bind != prev.Bind || s.Token != prev.Token):
+	case s.Enabled && s.Token != prev.Token:
 		e.stopListenerLocked()
 		return e.startListenerLocked()
 	}
@@ -375,7 +377,7 @@ func (e *mcpEngine) applySettings(s mcpClientSettings) error {
 // --- listener ---
 
 func (e *mcpEngine) startListenerLocked() error {
-	ln, err := net.Listen("tcp", e.settings.Bind)
+	ln, err := net.Listen("tcp", e.listen)
 	if err != nil {
 		return err
 	}
