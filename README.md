@@ -1,24 +1,28 @@
 # brclientd
 
 Headless [Bison Relay](https://github.com/companyzero/bisonrelay) daemon.
-Wraps the BR `client` library behind a JSON-RPC surface (clientrpc) so any
-application can integrate BR messaging without embedding the TUI or the
-Flutter GUI.
+Wraps the BR `client` library behind two network surfaces (clientrpc and
+a status REST API) so any application can integrate BR messaging without
+embedding the TUI or the Flutter GUI.
 
 Designed for projects that already operate an external `dcrlnd` and want
 to add BR features through a clean network boundary.
 
-## Status
+## Features
 
-Phase 1 skeleton. Connects to dcrlnd, prints `ready`, exits on SIGTERM.
-clientrpc, identity creation, and the BR client core wire in later phases.
+- Full BR client core: private messages, group chats, posts and comments,
+  file sharing, tips, pages and simplestore hosting.
+- clientrpc: Bison Relay's stock JSON-RPC surface over mTLS WebSocket.
+- Status REST API for frontends and supervisors.
+- Identity bootstrap over RPC: no interactive setup, a companion app
+  creates the identity (or restores a backup) with one request.
+- Full-state backup and restore.
+- External dcrlnd only; polls and waits for the LN wallet instead of
+  crash-looping.
+- Decred daemon conventions: CLI flags plus INI config file, documented
+  config written on first run.
 
 ## Configuration
-
-brclientd follows the Decred daemon conventions (dcrd / dcrwallet / dcrlnd):
-CLI flags + an INI config file, parsed via
-[`go-flags`](https://github.com/jessevdk/go-flags). Paths default to the
-platform's standard application directory.
 
 Default locations on Linux:
 
@@ -30,9 +34,9 @@ Default locations on Linux:
 ```
 
 On first run at the default location brclientd writes a documented
-`brclientd.conf` (every option commented at its default) into the application
-data directory, the same way dcrd does. See `sampleconfig/sample-brclientd.conf`
-for that template.
+`brclientd.conf` (every option commented at its default) into the
+application data directory, the same way dcrd does. The template is
+`sampleconfig/sample-brclientd.conf`.
 
 Frequently used flags:
 
@@ -46,7 +50,7 @@ brclientd \
 
 Run `brclientd --help` for the full list. All long-form flags are also
 valid INI keys; sections map to flag groups (`[dcrlnd options]`,
-`[clientrpc options]`).
+`[clientrpc options]`). See [docs/install.md](docs/install.md) for details.
 
 ## Build
 
@@ -54,11 +58,23 @@ valid INI keys; sections map to flag groups (`[dcrlnd options]`,
 go build ./cmd/brclientd
 ```
 
-Container image:
+See [docs/build.md](docs/build.md) for version stamping and the container
+image.
 
-```
-docker build -t brclientd:dev .
-```
+## Documentation
+
+- [docs/install.md](docs/install.md) - running the daemon, data locations, configuration
+- [docs/build.md](docs/build.md) - compiling from source, building the container image
+- [docs/dcrlnd.md](docs/dcrlnd.md) - the external dcrlnd requirement and startup gates
+- [docs/rpc.md](docs/rpc.md) - RPC glossary: clientrpc and the status REST API
+
+## Bison Relay
+
+brclientd builds on the Bison Relay project by Company Zero:
+
+- Protocol, client library, brclient TUI and bruig GUI:
+  https://github.com/companyzero/bisonrelay
+- About Bison Relay: https://bisonrelay.org
 
 ## License
 
