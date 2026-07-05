@@ -409,8 +409,8 @@ github.com/juju/qthttptest v0.0.1/go.mod h1://LCf/Ls22/rPw2u1yWukUJvYtfPY4nYpWUl
 github.com/juju/schema v1.0.0/go.mod h1:Y+ThzXpUJ0E7NYYocAbuvJ7vTivXfrof/IfRPq/0abI=
 github.com/juju/webbrowser v0.0.0-20160309143629-54b8c57083b4/go.mod h1:G6PCelgkM6cuvyD10iYJsjLBsSadVXtJ+nBxFAxE2BU=
 github.com/julienschmidt/httprouter v1.2.0/go.mod h1:SYymIcj16QtmaHHD7aYtjjsJG7VTCxuUUipMqKk8s4w=
-github.com/karamble/brmcp v0.0.0-20260702211120-25a82c8ce828 h1:pTKVCQ1hFmlBocxs+jWpbtdNUdZcI8uFmJwoLU4f+Fo=
-github.com/karamble/brmcp v0.0.0-20260702211120-25a82c8ce828/go.mod h1:3vQ8V2PvhGBZ0lllsfaaXFazEYnzeUXWtxKLMEUg3e8=
+github.com/karamble/brmcp v0.0.0-20260705103351-6faa80f84a71 h1:KZdiAvox7lRRyLlys8qVsvhlKlMMDSD9g47rhKZZ6pU=
+github.com/karamble/brmcp v0.0.0-20260705103351-6faa80f84a71/go.mod h1:3vQ8V2PvhGBZ0lllsfaaXFazEYnzeUXWtxKLMEUg3e8=
 github.com/kisielk/errcheck v1.5.0/go.mod h1:pFxgyoBC7bSaBwPgfKdkLd5X25qrDl4LWUI2bnpBCr8=
 github.com/kisielk/gotool v1.0.0/go.mod h1:XhKaO+MFFWcvkIS/tQcRk01m1F5IRFswLeQ+oQHNcck=
 github.com/kkdai/bstream v1.0.0 h1:Se5gHwgp2VT2uHfDrkbbgbgEvV9cimLELwrPJctSjg8=

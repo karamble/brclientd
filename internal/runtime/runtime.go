@@ -188,13 +188,14 @@ func Run(ctx context.Context, cfg Config) error {
 	statusSrv.SetLNPay(dcrlndPay)
 
 	// BR-MCP client: lets local MCP agents call tool services offered by
-	// Bison Relay bots (github.com/karamble/brmcp), with payments gated by
-	// the persisted settings. The listener only binds when enabled there.
-	mcpEng, err := newMCPEngine(gctx, c, cfg.DataDir, cfg.MCPListen, cfg.LogFn("MCPC"))
+	// Bison Relay bots (github.com/karamble/brmcp/bridge), with payments
+	// gated by the persisted settings. The listener only binds when
+	// enabled there.
+	mcpBridge, err := newMCPBridge(gctx, c, cfg.DataDir, cfg.MCPListen, cfg.LogFn("MCPC"))
 	if err != nil {
 		return err
 	}
-	statusSrv.SetMCPEngine(mcpEng)
+	statusSrv.SetMCPEngine(mcpBridge)
 
 	// Auto-archive contacts unheard past the configured threshold.
 	g.Go(func() error { return groupsSweeper(gctx, c, groups, notifs) })

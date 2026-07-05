@@ -7,28 +7,29 @@ package runtime
 import (
 	"encoding/json"
 	"net/http"
-	"sort"
+
+	"github.com/karamble/brmcp/bridge"
 )
 
-// The BR-MCP client engine's dashboard surface: settings round-trip,
+// The BR-MCP client bridge's dashboard surface: settings round-trip,
 // pending payment approvals, and the spend log.
 
-func (s *StatusServer) mcpEngineOr503(w http.ResponseWriter) *mcpEngine {
+func (s *StatusServer) mcpBridgeOr503(w http.ResponseWriter) *bridge.Bridge {
 	s.mcpEngMu.Lock()
-	e := s.mcpEng
+	b := s.mcpEng
 	s.mcpEngMu.Unlock()
-	if e == nil {
+	if b == nil {
 		http.Error(w, "MCP engine not yet running", http.StatusServiceUnavailable)
 		return nil
 	}
-	return e
+	return b
 }
 
-// SetMCPEngine wires the BR-MCP client engine once the runtime built it.
-func (s *StatusServer) SetMCPEngine(e *mcpEngine) {
+// SetMCPEngine wires the BR-MCP client bridge once the runtime built it.
+func (s *StatusServer) SetMCPEngine(b *bridge.Bridge) {
 	s.mcpEngMu.Lock()
 	defer s.mcpEngMu.Unlock()
-	s.mcpEng = e
+	s.mcpEng = b
 }
 
 func mcpWriteJSON(w http.ResponseWriter, v any) {
@@ -38,24 +39,24 @@ func mcpWriteJSON(w http.ResponseWriter, v any) {
 
 // handleMCPSettings serves GET/POST /settings/mcpclient.
 func (s *StatusServer) handleMCPSettings(w http.ResponseWriter, r *http.Request) {
-	e := s.mcpEngineOr503(w)
-	if e == nil {
+	b := s.mcpBridgeOr503(w)
+	if b == nil {
 		return
 	}
 	switch r.Method {
 	case http.MethodGet:
-		mcpWriteJSON(w, e.currentSettings())
+		mcpWriteJSON(w, b.Settings())
 	case http.MethodPost:
-		var req mcpClientSettings
+		var req bridge.Settings
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		if err := e.applySettings(req); err != nil {
+		if err := b.ApplySettings(req); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		mcpWriteJSON(w, e.currentSettings())
+		mcpWriteJSON(w, b.Settings())
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -63,25 +64,23 @@ func (s *StatusServer) handleMCPSettings(w http.ResponseWriter, r *http.Request)
 
 // handleMCPPending serves GET /mcp/pending: payments parked for approval.
 func (s *StatusServer) handleMCPPending(w http.ResponseWriter, r *http.Request) {
-	e := s.mcpEngineOr503(w)
-	if e == nil {
+	b := s.mcpBridgeOr503(w)
+	if b == nil {
 		return
 	}
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	list := e.pendingList()
-	sort.Slice(list, func(i, j int) bool { return list[i].Created < list[j].Created })
 	mcpWriteJSON(w, struct {
-		Pending []*mcpPending `json:"pending"`
-	}{Pending: list})
+		Pending []bridge.PendingPayment `json:"pending"`
+	}{Pending: b.PendingPayments()})
 }
 
 // handleMCPPendingResolve serves POST /mcp/pending/resolve {id, approve}.
 func (s *StatusServer) handleMCPPendingResolve(w http.ResponseWriter, r *http.Request) {
-	e := s.mcpEngineOr503(w)
-	if e == nil {
+	b := s.mcpBridgeOr503(w)
+	if b == nil {
 		return
 	}
 	if r.Method != http.MethodPost {
@@ -100,7 +99,7 @@ func (s *StatusServer) handleMCPPendingResolve(w http.ResponseWriter, r *http.Re
 		http.Error(w, "id is required", http.StatusBadRequest)
 		return
 	}
-	if !e.resolvePending(req.ID, req.Approve) {
+	if !b.ResolvePayment(req.ID, req.Approve) {
 		http.Error(w, "no such pending payment", http.StatusNotFound)
 		return
 	}
@@ -110,20 +109,20 @@ func (s *StatusServer) handleMCPPendingResolve(w http.ResponseWriter, r *http.Re
 // handleMCPSpend serves GET /mcp/spend: the recorded payments plus the
 // rolling 24h total the daily cap is enforced against.
 func (s *StatusServer) handleMCPSpend(w http.ResponseWriter, r *http.Request) {
-	e := s.mcpEngineOr503(w)
-	if e == nil {
+	b := s.mcpBridgeOr503(w)
+	if b == nil {
 		return
 	}
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	entries, today := e.spendSummary()
+	entries, today := b.SpendLog()
 	if entries == nil {
-		entries = []mcpSpendEntry{}
+		entries = []bridge.SpendEntry{}
 	}
 	mcpWriteJSON(w, struct {
-		Entries    []mcpSpendEntry `json:"entries"`
-		TodayAtoms int64           `json:"today_atoms"`
+		Entries    []bridge.SpendEntry `json:"entries"`
+		TodayAtoms int64               `json:"today_atoms"`
 	}{Entries: entries, TodayAtoms: today})
 }

@@ -12,6 +12,7 @@ import (
 
 	"github.com/companyzero/bisonrelay/client/clientdb"
 	"github.com/companyzero/bisonrelay/zkidentity"
+	"github.com/karamble/brmcp"
 )
 
 // connectionOut is the wire shape of GET /connection. "online" is the last
@@ -280,7 +281,7 @@ func (s *StatusServer) handleFilters(w http.ResponseWriter, r *http.Request) {
 		// silently kill agent sessions (the MCP engine never sees the
 		// dropped replies). Envelopes are hidden from chat anyway, so such
 		// a rule has no legitimate use.
-		if !req.SkipPMs && re.MatchString(sampleMCPEnvelope) {
+		if !req.SkipPMs && re.MatchString(brmcp.SampleEnvelope) {
 			http.Error(w, "regexp matches MCP protocol frames (--mcp[...]--); "+
 				"filtering them would break MCP over Bison Relay, and they "+
 				"are already hidden from chat", http.StatusBadRequest)

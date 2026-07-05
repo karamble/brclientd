@@ -27,6 +27,7 @@ import (
 	"github.com/companyzero/bisonrelay/zkidentity"
 	"github.com/decred/slog"
 	"github.com/karamble/brmcp"
+	"github.com/karamble/brmcp/bridge"
 
 	"github.com/karamble/brclientd/internal/certgen"
 	"github.com/karamble/brclientd/internal/identity"
@@ -88,7 +89,7 @@ type StatusServer struct {
 	lnPay   *client.DcrlnPaymentClient
 
 	mcpEngMu sync.Mutex
-	mcpEng   *mcpEngine
+	mcpEng   *bridge.Bridge
 }
 
 // SetClient attaches a live *client.Client to the StatusServer once the BR
