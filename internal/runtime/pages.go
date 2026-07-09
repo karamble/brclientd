@@ -9,9 +9,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -20,6 +22,8 @@ import (
 	"github.com/companyzero/bisonrelay/client"
 	"github.com/companyzero/bisonrelay/client/clientintf"
 	"github.com/companyzero/bisonrelay/zkidentity"
+
+	"github.com/karamble/brclientd/internal/identity"
 )
 
 // handlePagesFetch fetches a single page (resource) and blocks until the
@@ -332,6 +336,157 @@ func (s *StatusServer) handlePagesLocalSave(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// chatEmbedNameRE matches the localfilename form PM history uses for a
+// received chat embed: embeds/<16-hex ShortLogID>/<file>. The file segment has
+// no separators, so a matching name names exactly one file in one peer's
+// embed folder.
+var chatEmbedNameRE = regexp.MustCompile(`^embeds/([0-9a-f]{16})/([A-Za-z0-9._-]+)$`)
+
+// pageAssetNameRE mirrors pageNameRE for the raster image types a page may
+// reference via an embed localfilename. Import destinations are restricted to
+// this set; there is deliberately no endpoint that deletes these assets.
+var pageAssetNameRE = regexp.MustCompile(`^([A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:jpg|jpeg|jfif|png|gif|webp)$`)
+
+func validatePageAssetName(name string) (string, bool) {
+	name = strings.TrimSpace(name)
+	if name == "" || strings.Contains(name, "..") || !pageAssetNameRE.MatchString(name) {
+		return "", false
+	}
+	return name, true
+}
+
+// maxImportEmbedBytes caps imported images well under the ~1 MiB resource
+// reply payload: page replies are not chunked, so a page plus its base64
+// inlined embeds must fit one message or the whole fetch fails.
+const maxImportEmbedBytes = 512 << 10
+
+// handlePagesLocalImportEmbed copies one received chat embed into the pages
+// directory so a hosted page can reference it via an embed localfilename and
+// ProcessEmbeds inlines it when the page is served. Body: {source, dest}.
+// The source must be a raster image in the chat-embeds store (the clientdb
+// layout under <DataDir>/db/embeds, not EmbedsRoot) and the destination an
+// image path inside PagesDir. Both sides resolve through os.Root, so neither
+// traversal nor symlinks can escape their directory. Imports never overwrite.
+func (s *StatusServer) handlePagesLocalImportEmbed(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.PagesDir == "" {
+		http.Error(w, "pages dir not configured", http.StatusServiceUnavailable)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+	var req struct {
+		Source string `json:"source"`
+		Dest   string `json:"dest"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	src := strings.TrimSpace(req.Source)
+	m := chatEmbedNameRE.FindStringSubmatch(src)
+	if m == nil || strings.Contains(src, "..") {
+		http.Error(w, "invalid source: must be embeds/<uid16>/<file>", http.StatusBadRequest)
+		return
+	}
+	dest, ok := validatePageAssetName(req.Dest)
+	if !ok {
+		http.Error(w, "invalid dest: must be an image path inside the pages directory", http.StatusBadRequest)
+		return
+	}
+
+	embedsRoot, err := os.OpenRoot(filepath.Join(identity.PathsIn(s.DataDir).Root, "embeds"))
+	if err != nil {
+		http.Error(w, "open embeds dir: "+err.Error(), http.StatusNotFound)
+		return
+	}
+	defer embedsRoot.Close()
+	rel := m[1] + "/" + m[2]
+	fi, err := embedsRoot.Lstat(rel)
+	if err != nil {
+		http.Error(w, "source embed not found", http.StatusNotFound)
+		return
+	}
+	if !fi.Mode().IsRegular() {
+		http.Error(w, "source is not a regular file", http.StatusBadRequest)
+		return
+	}
+	if fi.Size() > maxImportEmbedBytes {
+		http.Error(w, fmt.Sprintf("source exceeds %d bytes; a page referencing it could not be served in one resource reply", maxImportEmbedBytes), http.StatusBadRequest)
+		return
+	}
+	f, err := embedsRoot.Open(rel)
+	if err != nil {
+		http.Error(w, "open source embed: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	data, err := io.ReadAll(io.LimitReader(f, maxImportEmbedBytes+1))
+	_ = f.Close()
+	if err != nil {
+		http.Error(w, "read source embed: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	if len(data) > maxImportEmbedBytes {
+		http.Error(w, "source grew past the import size cap", http.StatusBadRequest)
+		return
+	}
+	contentType := http.DetectContentType(data)
+	switch contentType {
+	case "image/jpeg", "image/png", "image/gif", "image/webp":
+	default:
+		http.Error(w, "source is not a raster image", http.StatusBadRequest)
+		return
+	}
+
+	// PagesDir exists once pages were ever enabled; create it here so an
+	// import on a fresh node does not depend on hosting having run first.
+	if err := os.MkdirAll(s.PagesDir, 0o700); err != nil {
+		http.Error(w, "create pages dir: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	pagesRoot, err := os.OpenRoot(s.PagesDir)
+	if err != nil {
+		http.Error(w, "open pages dir: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	defer pagesRoot.Close()
+	if _, err := pagesRoot.Lstat(dest); err == nil {
+		http.Error(w, "dest already exists", http.StatusConflict)
+		return
+	}
+	if dir := path.Dir(dest); dir != "." {
+		if err := pagesRoot.MkdirAll(dir, 0o700); err != nil {
+			http.Error(w, "create dest dir: "+err.Error(), http.StatusBadGateway)
+			return
+		}
+	}
+	// O_EXCL both enforces no-overwrite atomically and refuses a path that
+	// exists as a symlink.
+	wf, err := pagesRoot.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		http.Error(w, "create dest: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	if _, err := wf.Write(data); err != nil {
+		_ = wf.Close()
+		http.Error(w, "write dest: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	if err := wf.Close(); err != nil {
+		http.Error(w, "close dest: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"source":      src,
+		"dest":        dest,
+		"sizeBytes":   len(data),
+		"contentType": contentType,
+	})
 }
 
 // handlePagesLocalDelete removes one hosted page. Body: {name}.

@@ -263,6 +263,7 @@ func (s *StatusServer) Run(ctx context.Context) error {
 	mux.HandleFunc("/pages/local", s.handlePagesLocalList)
 	mux.HandleFunc("/pages/local/file", s.handlePagesLocalFile)
 	mux.HandleFunc("/pages/local/save", s.handlePagesLocalSave)
+	mux.HandleFunc("/pages/local/import-embed", s.handlePagesLocalImportEmbed)
 	mux.HandleFunc("/pages/local/delete", s.handlePagesLocalDelete)
 	mux.HandleFunc("/backup", s.handleBackup)
 	mux.HandleFunc("/connection", s.handleConnection)
