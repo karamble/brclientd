@@ -61,6 +61,23 @@ go build ./cmd/brclientd
 See [docs/build.md](docs/build.md) for version stamping and the container
 image.
 
+## Testing
+
+Unit tests run with a plain `go test ./...`. Two end-to-end suites exist on
+top of that, both fully offline (an in-process relay, no Lightning):
+
+```
+./scripts/e2e-upstream.sh -race        # upstream bisonrelay suite against the pinned library
+go test -tags brclientde2e ./internal/e2e/ -count=1   # two brclientd instances over a real relay
+```
+
+The second suite boots full daemons on the free payment scheme, pairs them
+over programmatic invites, and drives PMs, pages with embeds, content
+filters, file transfer, tips, group chats, posts and comments, avatar
+propagation, mediated key exchanges, ratchet resets, and offline delivery
+across a daemon restart - all through the same mTLS status API the
+dashboard uses. Set `BR_E2E_LOG=1` for client logs.
+
 ## Documentation
 
 - [docs/install.md](docs/install.md) - running the daemon, data locations, configuration
