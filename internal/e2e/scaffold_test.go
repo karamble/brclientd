@@ -62,6 +62,9 @@ func newTestRelay(t *testing.T, ctx context.Context) string {
 	cfg := settings.New()
 	cfg.Root = dir
 	cfg.RoutedMessages = filepath.Join(dir, settings.ZKSRoutedMessages)
+	// The default is an unexpanded "~/.brserver/paidrvs", which the server
+	// creates literally in the process working directory.
+	cfg.PaidRVs = filepath.Join(dir, settings.ZKSPaidRVs)
 	cfg.LogFile = filepath.Join(dir, "brserver.log")
 	cfg.Listen = []string{"127.0.0.1:0"}
 	cfg.InitSessTimeout = time.Second
