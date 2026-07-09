@@ -18,6 +18,7 @@ import (
 
 	"github.com/companyzero/bisonrelay/client"
 	"github.com/companyzero/bisonrelay/client/clientdb"
+	"github.com/companyzero/bisonrelay/client/clientintf"
 	"github.com/companyzero/bisonrelay/client/rpcserver"
 	"github.com/companyzero/bisonrelay/zkidentity"
 	"github.com/decred/slog"
@@ -39,6 +40,13 @@ type Config struct {
 	AppName           string
 	AppVersion        string
 	BRServer          string
+	// BRServerDirect dials BRServer directly as the relay instead of
+	// resolving it through a seeder query.
+	BRServerDirect bool
+	// PayScheme selects how relay fees are paid: paySchemeDcrlnd (default)
+	// runs the dcrlnd gates and pays over LN; paySchemeFree skips dcrlnd
+	// entirely and only works against a relay with a free pay scheme.
+	PayScheme         string
 	DB                *clientdb.DB
 	DcrlndTLSCert     string
 	DcrlndMacaroon    string
@@ -75,6 +83,13 @@ type Config struct {
 // so the process exits cleanly and the container supervisor relaunches it
 // with the persisted settings.
 var ErrRestartRequested = errors.New("restart requested for settings change")
+
+// Payment scheme values accepted in Config.PayScheme. Mirrors the config
+// package's PaySchemeDcrlnd/PaySchemeFree (runtime avoids importing config).
+const (
+	paySchemeDcrlnd = "dcrlnd"
+	paySchemeFree   = "free"
+)
 
 // Run brings up the /status HTTP server and clientrpc.VersionService
 // immediately, polls dcrlnd until its wallet is unlocked, then starts BR
@@ -138,17 +153,30 @@ func Run(ctx context.Context, cfg Config) error {
 	// the LN setup wizard, and waitForDcrlndConnect blocks until it
 	// appears. If this ran before the status server, port 7677 would
 	// never open and the dashboard / docker healthcheck would have
-	// nothing to talk to.
-	dcrlndPay, err := waitForDcrlndConnect(gctx, cfg.DcrlndTLSCert, cfg.DcrlndMacaroon, cfg.DcrlndRPCHost, cfg.LogFn("LNPC"))
-	if err != nil {
-		return err
+	// nothing to talk to. On the free scheme there is no dcrlnd at all:
+	// the gates are skipped and dcrlndPay stays nil (LN-only surfaces
+	// degrade gracefully; the relay must charge nothing).
+	var dcrlndPay *client.DcrlnPaymentClient
+	if cfg.PayScheme == paySchemeFree {
+		cfg.Log.Infof("Payment scheme: free (dcrlnd gates skipped)")
+		tracker.MarkDcrlndReady()
+		tracker.MarkChannelReady()
+	} else {
+		var err error
+		dcrlndPay, err = waitForDcrlndConnect(gctx, cfg.DcrlndTLSCert, cfg.DcrlndMacaroon, cfg.DcrlndRPCHost, cfg.LogFn("LNPC"))
+		if err != nil {
+			return err
+		}
+		if err := waitForDcrlndUnlocked(gctx, dcrlndPay, tracker, cfg.LogFn("LNGT")); err != nil {
+			return err
+		}
+		if err := waitForChannelToHub(gctx, dcrlndPay, tracker, cfg.LogFn("CHGT")); err != nil {
+			return err
+		}
 	}
-
-	if err := waitForDcrlndUnlocked(gctx, dcrlndPay, tracker, cfg.LogFn("LNGT")); err != nil {
-		return err
-	}
-	if err := waitForChannelToHub(gctx, dcrlndPay, tracker, cfg.LogFn("CHGT")); err != nil {
-		return err
+	var payClient clientintf.PaymentClient = clientintf.FreePaymentClient{}
+	if dcrlndPay != nil {
+		payClient = dcrlndPay
 	}
 
 	identityChan := make(chan *zkidentity.FullIdentity, 1)
@@ -159,8 +187,10 @@ func Run(ctx context.Context, cfg Config) error {
 
 	c, err := startBRClient(BRClientCfg{
 		DB:              cfg.DB,
+		PayClient:       payClient,
 		DcrlndPay:       dcrlndPay,
 		BRServer:        cfg.BRServer,
+		BRServerDirect:  cfg.BRServerDirect,
 		SeederCachePath: cfg.SeederCachePath,
 		MsgsRoot:        cfg.MsgsRoot,
 		ProxyAddr:       cfg.ProxyAddr,

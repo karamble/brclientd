@@ -29,6 +29,13 @@ const (
 	DefaultBRServer       = "bisonrelay.org:443"
 	DefaultClientRPCPort  = "7676"
 	DefaultStatusPort     = "7677"
+
+	// Payment schemes. dcrlnd pays relay fees over the Lightning Network and
+	// requires a connected, unlocked dcrlnd with a channel to the relay's hub;
+	// free skips all of that and only works against a relay running a free
+	// pay scheme (e.g. a self-hosted private relay).
+	PaySchemeDcrlnd = "dcrlnd"
+	PaySchemeFree   = "free"
 )
 
 var (
@@ -86,6 +93,9 @@ type Config struct {
 	TestNet     bool   `long:"testnet" description:"Use the test network"`
 	SimNet      bool   `long:"simnet" description:"Use the simulation network"`
 	BRServer    string `long:"brserver" description:"Bison Relay relay server address"`
+
+	PayScheme      string `long:"payscheme" description:"Payment scheme: dcrlnd (Lightning, default) or free (relay must run a free pay scheme; skips the dcrlnd gates)"`
+	BRServerDirect bool   `long:"brserverdirect" description:"Dial brserver directly as the relay instead of resolving it through a seeder (proxy settings do not apply)"`
 
 	Proxy        string `long:"proxy" description:"Connect via SOCKS5 proxy (eg. 127.0.0.1:9050)"`
 	ProxyUser    string `long:"proxyuser" description:"Username for proxy server"`
@@ -203,6 +213,12 @@ func Load(args []string, version string) (*Config, error) {
 	}
 	if cfg.SimpleStore.PayType == "" {
 		cfg.SimpleStore.PayType = "ln"
+	}
+	if cfg.PayScheme == "" {
+		cfg.PayScheme = PaySchemeDcrlnd
+	}
+	if cfg.PayScheme != PaySchemeDcrlnd && cfg.PayScheme != PaySchemeFree {
+		return nil, fmt.Errorf("--payscheme must be %q or %q", PaySchemeDcrlnd, PaySchemeFree)
 	}
 
 	if err := ensureDir(cfg.AppDataDir); err != nil {

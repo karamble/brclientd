@@ -48,14 +48,18 @@ func buildBRDownloadTag(nick, filename string, size uint64) string {
 	return "--download[" + strings.Join(parts, ",") + "]--"
 }
 
-// BRClientCfg describes what runtime.Run needs to build a BR client. The
-// concrete *client.DcrlnPaymentClient is required (not the abstract
-// PaymentClient interface) so the CheckServerSession closure can hand its
-// LNRPC into CheckLNWalletUsable.
+// BRClientCfg describes what runtime.Run needs to build a BR client.
+// PayClient is the payment client handed to the BR library and is always
+// set (the free client on the free scheme). DcrlndPay is the concrete
+// Lightning client when the dcrlnd scheme is active and nil otherwise; the
+// LN-only surfaces (CheckServerSession's wallet check, the storefront sale
+// capacity probe) are skipped when it is nil.
 type BRClientCfg struct {
 	DB              *clientdb.DB
+	PayClient       clientintf.PaymentClient
 	DcrlndPay       *client.DcrlnPaymentClient
 	BRServer        string
+	BRServerDirect  bool
 	SeederCachePath string
 	// MsgsRoot is the message-log directory; used to recover a GC's name from
 	// its log filename after the GC has been deleted locally (e.g. on a kick).
@@ -118,7 +122,14 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 			dialFunc = proxy.DialContext
 		}
 	}
-	dialer := cachedSeederDialer(cfg.BRServer, cfg.LogFn("CONN"), dialFunc, cfg.SeederCachePath)
+	var dialer clientintf.Dialer
+	if cfg.BRServerDirect {
+		// BRServer IS the relay: dial it directly (no seeder resolution,
+		// proxy settings do not apply on this path).
+		dialer = clientintf.NetDialer(cfg.BRServer, cfg.LogFn("CONN"))
+	} else {
+		dialer = cachedSeederDialer(cfg.BRServer, cfg.LogFn("CONN"), dialFunc, cfg.SeederCachePath)
+	}
 
 	// Assigned after client.New below; notification callbacks only fire once
 	// the client runs, so closures capturing brc see the live client.
@@ -1484,7 +1495,7 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 
 	brCfg := client.Config{
 		DB:            cfg.DB,
-		PayClient:     cfg.DcrlndPay,
+		PayClient:     cfg.PayClient,
 		Dialer:        dialer,
 		Notifications: ntfns,
 		Logger:        cfg.LogFn,
@@ -1575,6 +1586,9 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 
 		CheckServerSession: func(connCtx context.Context, lnNode string) error {
 			cfg.Tracker.SetServerNode(lnNode)
+			if cfg.DcrlndPay == nil {
+				return nil
+			}
 			err := client.CheckLNWalletUsable(connCtx, cfg.DcrlndPay.LNRPC(), lnNode)
 			if err != nil {
 				cfg.Tracker.SetWalletErr(err.Error())

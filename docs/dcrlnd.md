@@ -38,3 +38,14 @@ macaroon files at startup are not fatal either; brclientd waits for them
 to appear. This lets it come up alongside a fresh dcrlnd that has not
 finished its own wallet setup, without crash-looping. `GET /status` on
 port 7677 reports which gate the daemon is currently waiting on.
+
+## Free payment scheme
+
+Setting `payscheme=free` skips every dcrlnd gate: no Lightning node is
+contacted and none of the dcrlnd options are required. This only works
+against a relay that runs a free pay scheme (for example a self-hosted
+private relay), and the LN-dependent features - funded invites, tips,
+LN-paid store orders - are unavailable. The default scheme remains
+`dcrlnd`; an unset `payscheme` behaves exactly as before. Pair it with
+`brserverdirect=1` to dial a self-hosted relay directly instead of
+resolving it through a seeder.

@@ -57,7 +57,8 @@ func run(args []string) error {
 	brlog.BRCD.Infof("Data:     %s", cfg.DataDir)
 	brlog.BRCD.Infof("Log:      %s", cfg.LogFile())
 
-	if cfg.Dcrlnd.TLSCertPath == "" || cfg.Dcrlnd.MacaroonPath == "" {
+	if cfg.PayScheme == config.PaySchemeDcrlnd &&
+		(cfg.Dcrlnd.TLSCertPath == "" || cfg.Dcrlnd.MacaroonPath == "") {
 		return errors.New("dcrlnd.tlscertpath and dcrlnd.macaroonpath are required")
 	}
 
@@ -92,6 +93,8 @@ func run(args []string) error {
 		AppName:           config.AppName,
 		AppVersion:        Version,
 		BRServer:          cfg.BRServer,
+		BRServerDirect:    cfg.BRServerDirect,
+		PayScheme:         cfg.PayScheme,
 		ProxyAddr:         cfg.Proxy,
 		ProxyUser:         cfg.ProxyUser,
 		ProxyPass:         cfg.ProxyPass,
