@@ -25,16 +25,26 @@ import (
 // runtime. BR binds one provider at the resource root; this lets a node flip
 // between hosting static pages and a simplestore without restarting the BR
 // client (the store controller swaps the delegate).
+//
+// It also carries an optional override delegate: when a third-party service
+// docks on the resources interface, override is set and takes precedence over
+// active for as long as it is connected. With no override (nobody docked) the
+// node behaves exactly as before - off/pages/store per active - so the feature
+// is inert until a service connects.
 type switchableProvider struct {
-	mu     sync.RWMutex
-	active resources.Provider
+	mu       sync.RWMutex
+	active   resources.Provider
+	override resources.Provider
 }
 
 func (s *switchableProvider) Fulfill(ctx context.Context, uid clientintf.UserID,
 	req *rpc.RMFetchResource) (*rpc.RMFetchResourceReply, error) {
 
 	s.mu.RLock()
-	p := s.active
+	p := s.override
+	if p == nil {
+		p = s.active
+	}
 	s.mu.RUnlock()
 	if p == nil {
 		// No delegate means hosting is deactivated. Return ErrProviderNotFound
@@ -49,6 +59,13 @@ func (s *switchableProvider) Fulfill(ctx context.Context, uid clientintf.UserID,
 func (s *switchableProvider) set(p resources.Provider) {
 	s.mu.Lock()
 	s.active = p
+	s.mu.Unlock()
+}
+
+// setOverride installs (or clears, with nil) the override delegate.
+func (s *switchableProvider) setOverride(p resources.Provider) {
+	s.mu.Lock()
+	s.override = p
 	s.mu.Unlock()
 }
 
@@ -75,6 +92,7 @@ type storeMode struct {
 // simplestore, persists the choice, and can flip between them at runtime.
 type storeController struct {
 	prov     *switchableProvider
+	remote   *remoteProvider
 	client   *client.Client
 	lnPay    *client.DcrlnPaymentClient
 	notifs   *notifBus
@@ -101,6 +119,7 @@ func newStoreController(rootCtx context.Context, prov *switchableProvider, c *cl
 
 	ctrl := &storeController{
 		prov:     prov,
+		remote:   newRemoteProvider(logFn("RSRC"), c, 0),
 		client:   c,
 		lnPay:    lnPay,
 		notifs:   notifs,
@@ -159,6 +178,35 @@ func (s *storeController) SetMode(m storeMode) error {
 	}
 	return s.saveMode()
 }
+
+// DockResources connects a third-party service as the live resource provider,
+// receiving inbound fetch events on ch. It returns false if a service is
+// already docked (single occupant). While docked, the switchableProvider's
+// override routes every fetch to the service; the configured off/pages/store
+// mode is left untouched and resumes automatically on undock.
+func (s *storeController) DockResources(ch chan resourceRequestEvent) bool {
+	if !s.remote.attach(ch) {
+		return false
+	}
+	s.prov.setOverride(s.remote)
+	return true
+}
+
+// UndockResources disconnects the service and reverts to the configured mode.
+func (s *storeController) UndockResources(ch chan resourceRequestEvent) {
+	s.remote.detach(ch)
+	if !s.remote.docked() {
+		s.prov.setOverride(nil)
+	}
+}
+
+// FulfillResource delivers a docked service's reply to the waiting fetch.
+func (s *storeController) FulfillResource(rep resourceReply) {
+	s.remote.deliverReply(rep)
+}
+
+// ResourcesDocked reports whether a service currently holds the interface.
+func (s *storeController) ResourcesDocked() bool { return s.remote.docked() }
 
 // enableOffLocked deactivates hosting: the switchableProvider's delegate is
 // cleared, so any remote FetchResource hits the nil-delegate path and gets
