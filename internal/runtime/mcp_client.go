@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sync/atomic"
 	"time"
 
 	"github.com/companyzero/bisonrelay/client"
@@ -43,10 +44,16 @@ func (s mcpSender) SendPM(ctx context.Context, peer, text string) error {
 // reaches a terminal state or the bridge's wait budget runs out. Tip
 // attempts are asynchronous in the BR client, so payments are correlated
 // with their terminal progress events; non-terminal events (willRetry) are
-// ignored, matching the reference clients.
+// ignored, matching the reference clients. Terminal events that match no
+// live wait (the wait budget had passed, or the daemon restarted with the
+// attempt still running) resolve the bridge's pending spend entries
+// instead, so the spend log records the real outcome.
 type mcpTipPayer struct {
 	c       *client.Client
 	matcher *bridge.TipMatcher
+	// bridge is set after bridge.New (the payer is built first) and read
+	// from notification goroutines.
+	bridge atomic.Pointer[bridge.Bridge]
 }
 
 func newMCPTipPayer(c *client.Client) *mcpTipPayer {
@@ -64,7 +71,14 @@ func newMCPTipPayer(c *client.Client) *mcpTipPayer {
 				res = errors.New("tip attempt ended without completing")
 			}
 		}
-		p.matcher.Resolve(ru.ID().String(), amtMAtoms, res)
+		if !p.matcher.Resolve(ru.ID().String(), amtMAtoms, res) {
+			// No live wait consumed the event: a late or replayed
+			// outcome for a bridge payment lands on its spend entry;
+			// tips from other flows match no pending entry there.
+			if b := p.bridge.Load(); b != nil && amtMAtoms%1000 == 0 {
+				b.ResolveSpend(ru.ID().String(), amtMAtoms/1000, res)
+			}
+		}
 	}))
 	return p
 }
@@ -93,6 +107,16 @@ func (p *mcpTipPayer) Pay(ctx context.Context, payeeUID string, atoms int64) err
 		return nil
 	case <-ctx.Done():
 		w.Cancel()
+		// The terminal event may have resolved the wait in the same
+		// instant the deadline fired; it was consumed, so forward it to
+		// the spend entry or the outcome would be lost.
+		select {
+		case res := <-w.Done():
+			if b := p.bridge.Load(); b != nil {
+				b.ResolveSpend(user.ID().String(), atoms, res)
+			}
+		default:
+		}
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			return fmt.Errorf("tip not confirmed within %ds; the attempt keeps "+
 				"running in the background (up to 72h) and still credits the "+
@@ -109,10 +133,11 @@ func (p *mcpTipPayer) Pay(ctx context.Context, payeeUID string, atoms int64) err
 func newMCPBridge(ctx context.Context, c *client.Client,
 	dataDir, listen string, log slog.Logger) (*bridge.Bridge, error) {
 
+	payer := newMCPTipPayer(c)
 	b, err := bridge.New(bridge.Config{
 		DataDir:    dataDir,
 		Sender:     mcpSender{c},
-		Payer:      newMCPTipPayer(c),
+		Payer:      payer,
 		ListenAddr: listen,
 		Name:       "brclientd",
 		Logf:       log.Infof,
@@ -120,6 +145,7 @@ func newMCPBridge(ctx context.Context, c *client.Client,
 	if err != nil {
 		return nil, err
 	}
+	payer.bridge.Store(b)
 	c.NotificationManager().Register(client.OnPMNtfn(func(ru *client.RemoteUser, pm rpc.RMPrivateMessage, _ time.Time) {
 		b.HandlePM(ru.ID().String(), pm.Message)
 	}))
