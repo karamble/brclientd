@@ -19,6 +19,7 @@ import (
 	"github.com/companyzero/bisonrelay/client/clientintf"
 	"github.com/companyzero/bisonrelay/rpc"
 	"github.com/companyzero/bisonrelay/zkidentity"
+	"github.com/karamble/brclientd/internal/gaming"
 )
 
 // Routes (registered from status_server.go Run()):
@@ -472,9 +473,14 @@ func (s *StatusServer) handleGCHistory(w http.ResponseWriter, r *http.Request, g
 	// was added remain in the log; drop matches here. PMLogEntry carries no
 	// sender uid, so use the zero uid: global/gc-scoped rules still match on
 	// content (uid-scoped rules are skipped, a safe no-op).
+	// Gaming envelope frames are protocol traffic, not chat; they are hidden
+	// unconditionally so no user filter is ever needed for them.
 	var zeroUID clientintf.UserID
 	filtered := entries[:0]
 	for _, e := range entries {
+		if gaming.IsEnvelope(e.Message) {
+			continue
+		}
 		if ok, _ := c.FilterGCM(zeroUID, gcid, e.Message); ok {
 			continue
 		}

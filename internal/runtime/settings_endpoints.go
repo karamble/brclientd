@@ -12,6 +12,7 @@ import (
 
 	"github.com/companyzero/bisonrelay/client/clientdb"
 	"github.com/companyzero/bisonrelay/zkidentity"
+	"github.com/karamble/brclientd/internal/gaming"
 	"github.com/karamble/brmcp"
 
 	"github.com/karamble/brclientd/internal/msig"
@@ -295,6 +296,19 @@ func (s *StatusServer) handleFilters(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "regexp matches shared-wallet protocol frames (--msig[...]--); "+
 				"filtering them would break multisig coordination over Bison Relay, "+
 				"and they are already hidden from chat", http.StatusBadRequest)
+			return
+		}
+		// The same reasoning, and worse consequences, for gaming frames. A
+		// table's traffic rides a group chat while its invites arrive as
+		// PMs, so a rule reaching either class has to be refused - checking
+		// only SkipPMs would let a GC-scoped rule through. Filtering these
+		// drops a player out of a hand with funds escrowed, which is
+		// indistinguishable from walking away and is penalised as such.
+		if (!req.SkipPMs || !req.SkipGCMs) && re.MatchString(gaming.SampleEnvelope) {
+			http.Error(w, "regexp matches gaming protocol frames (--gaming[...]--); "+
+				"filtering them would drop players out of live games with "+
+				"funds at stake, and they are already hidden from chat",
+				http.StatusBadRequest)
 			return
 		}
 		cf := clientdb.ContentFilter{

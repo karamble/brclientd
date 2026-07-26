@@ -26,6 +26,7 @@ import (
 	"github.com/decred/dcrlnd/lnrpc"
 	"github.com/decred/go-socks/socks"
 	"github.com/decred/slog"
+	"github.com/karamble/brclientd/internal/gaming"
 	"github.com/karamble/brmcp"
 
 	"github.com/karamble/brclientd/internal/msig"
@@ -1250,10 +1251,12 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 		// never invoked for history/backlog, so the dashboard can badge from this
 		// in-process event without the replay that ChatService.PMStream incurs.
 		ntfns.Register(client.OnPMNtfn(func(ru *client.RemoteUser, pm rpc.RMPrivateMessage, ts time.Time) {
-			// MCP envelope frames are agent protocol traffic handled by
-			// the MCP engine; they are not chat and must not badge the
-			// UI or unarchive contacts.
-			if brmcp.IsEnvelope(pm.Message) {
+			// MCP and gaming envelope frames are protocol traffic
+			// handled elsewhere; they are not chat and must not badge
+			// the UI or unarchive contacts. Gaming invites arrive as
+			// PMs before a table's group chat exists, so both belong
+			// here.
+			if brmcp.IsEnvelope(pm.Message) || gaming.IsEnvelope(pm.Message) {
 				return
 			}
 			// Shared-wallet coordination frames are dashboard protocol
@@ -1300,6 +1303,11 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 		// (from OnGCMNtfn) so structural and message events flow over the
 		// same notif bus.
 		ntfns.Register(client.OnGCMNtfn(func(ru *client.RemoteUser, gcm rpc.RMGroupMessage, ts time.Time) {
+			// A table's traffic rides a group chat, so this is where
+			// most gaming frames arrive. They are protocol, not chat.
+			if gaming.IsEnvelope(gcm.Message) {
+				return
+			}
 			notifs.Publish(NotifEvent{
 				Type:      "gc-message",
 				Timestamp: ts,
