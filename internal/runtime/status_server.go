@@ -705,14 +705,27 @@ func (s *StatusServer) handleBlockContact(w http.ResponseWriter, r *http.Request
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// chatEmbedsDir is where clientdb stores the media it extracted from logged
+// messages for one conversation: <clientdb Root>/embeds/<ShortLogID>, keyed by
+// the contact's uid for PMs and by the gcid for group chats (clientdb.logMsg).
+// This is NOT EmbedsRoot, which clientdb only uses for SaveEmbed; same layout
+// handlePagesLocalImportEmbed reads from. Returns "" when DataDir is unset.
+func (s *StatusServer) chatEmbedsDir(id zkidentity.ShortID) string {
+	if s.DataDir == "" {
+		return ""
+	}
+	return filepath.Join(identity.PathsIn(s.DataDir).Root, "embeds", id.ShortLogID())
+}
+
 // handleClearPMHistory permanently deletes the local PM history (and inline
 // media) for one contact. dcrpulse-original: BR exposes no clear-history API,
 // so this operates directly on the on-disk message store. It removes every
 // MsgsRoot/*.<uid>.log (the filename embeds the contact's nick, which can
-// change over time, so we glob by uid) plus the contact's embeds dir. The
+// change over time, so we glob by uid) plus the contact's chat embeds dir. The
 // address book entry + ratchet are left intact so messaging can continue;
 // only the local copy is wiped (the peer keeps theirs). Irreversible. Pure
-// filesystem, so it works without a live BR client.
+// filesystem, so it works without a live BR client. Both are recreated on the
+// next message (clientdb opens the log O_CREATE and MkdirAlls the embeds dir).
 func (s *StatusServer) handleClearPMHistory(w http.ResponseWriter, r *http.Request) {
 	uid, ok := s.decodeUIDOnlyBody(w, r)
 	if !ok {
@@ -733,8 +746,8 @@ func (s *StatusServer) handleClearPMHistory(w http.ResponseWriter, r *http.Reque
 			return
 		}
 	}
-	if s.EmbedsRoot != "" {
-		if err := os.RemoveAll(filepath.Join(s.EmbedsRoot, uid.String())); err != nil {
+	if dir := s.chatEmbedsDir(uid); dir != "" {
+		if err := os.RemoveAll(dir); err != nil {
 			http.Error(w, "remove embeds: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
