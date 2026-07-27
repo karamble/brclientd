@@ -1251,12 +1251,30 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 		// never invoked for history/backlog, so the dashboard can badge from this
 		// in-process event without the replay that ChatService.PMStream incurs.
 		ntfns.Register(client.OnPMNtfn(func(ru *client.RemoteUser, pm rpc.RMPrivateMessage, ts time.Time) {
-			// MCP and gaming envelope frames are protocol traffic
-			// handled elsewhere; they are not chat and must not badge
-			// the UI or unarchive contacts. Gaming invites arrive as
-			// PMs before a table's group chat exists, so both belong
-			// here.
-			if brmcp.IsEnvelope(pm.Message) || gaming.IsEnvelope(pm.Message) {
+			// MCP frames are protocol traffic answered inside this
+			// process; they are not chat and must not badge the UI or
+			// unarchive contacts.
+			if brmcp.IsEnvelope(pm.Message) {
+				return
+			}
+			// Gaming frames are protocol too, but their consumer is in
+			// another container, so they are forwarded on their own
+			// event rather than dropped. Chat is still unaffected: the
+			// type is not "pm", so nothing badges and no archived
+			// contact returns. Invites arrive as PMs before a table's
+			// group chat exists, which is why this is here as well as
+			// on the GC side.
+			if gaming.IsEnvelope(pm.Message) {
+				notifs.Publish(NotifEvent{
+					Type:      "gaming-frame",
+					Timestamp: ts,
+					Payload: map[string]any{
+						"gcid":     "",
+						"from":     ru.ID().String(),
+						"fromNick": ru.Nick(),
+						"message":  pm.Message,
+					},
+				})
 				return
 			}
 			// Shared-wallet coordination frames are dashboard protocol
@@ -1297,15 +1315,28 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 		}))
 
 		// ---- GC (group-chat) notifications ----
-		// 12 OnGC* hooks. We republish each as gc-<kebab>. The dashboard's
-		// existing ChatService.GCMStream covers message arrival as 'gcm',
-		// but we also surface the higher-fidelity gc-message event here
-		// (from OnGCMNtfn) so structural and message events flow over the
-		// same notif bus.
+		// 12 OnGC* hooks. We republish each as gc-<kebab>, and message
+		// arrival as gc-message (from OnGCMNtfn), so structural and message
+		// events flow over the same notif bus. This is the only delivery
+		// path: consumers do not subscribe to ChatService.GCMStream, which
+		// replays its whole backlog on every (re)subscribe.
 		ntfns.Register(client.OnGCMNtfn(func(ru *client.RemoteUser, gcm rpc.RMGroupMessage, ts time.Time) {
 			// A table's traffic rides a group chat, so this is where
-			// most gaming frames arrive. They are protocol, not chat.
+			// most gaming frames arrive. They are protocol, not chat,
+			// and go out on their own event: the gaming bridge runs in
+			// another container, and dropping frames here left it with
+			// no way to receive them at all.
 			if gaming.IsEnvelope(gcm.Message) {
+				notifs.Publish(NotifEvent{
+					Type:      "gaming-frame",
+					Timestamp: ts,
+					Payload: map[string]any{
+						"gcid":     gcm.ID.String(),
+						"from":     ru.ID().String(),
+						"fromNick": ru.Nick(),
+						"message":  gcm.Message,
+					},
+				})
 				return
 			}
 			notifs.Publish(NotifEvent{
