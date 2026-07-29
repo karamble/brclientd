@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -448,9 +449,14 @@ func (s *StatusServer) handleGCHistory(w http.ResponseWriter, r *http.Request, g
 	}
 	gcName := dbGC.Name()
 
+	// Fetch the whole log, not one raw page of it: filtered messages are
+	// dropped below, and paging raw entries first would serve empty pages
+	// whenever the newest stretch of the log is dominated by dropped
+	// entries. clientdb parses the entire file per call regardless, so
+	// reading it all costs nothing extra.
 	var entries []clientdb.PMLogEntry
 	err = s.DB.View(r.Context(), func(tx clientdb.ReadTx) error {
-		got, err := s.DB.ReadLogGCMsg(tx, gcName, gcid, pageSize, pageNum)
+		got, err := s.DB.ReadLogGCMsg(tx, gcName, gcid, math.MaxInt32, 0)
 		if err != nil {
 			return err
 		}
@@ -474,7 +480,7 @@ func (s *StatusServer) handleGCHistory(w http.ResponseWriter, r *http.Request, g
 		}
 		filtered = append(filtered, e)
 	}
-	entries = filtered
+	entries = historyPage(filtered, pageSize, pageNum)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(struct {
 		GCID     string                `json:"gcid"`

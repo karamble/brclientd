@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -358,9 +359,15 @@ func (s *StatusServer) handleHistoryPM(w http.ResponseWriter, r *http.Request) {
 	pageSize := parsePositiveInt(r.URL.Query().Get("page_size"), 50, 500)
 	pageNum := parseNonNegativeInt(r.URL.Query().Get("page"), 0)
 
+	// Fetch the whole log, not one raw page of it: envelopes and filtered
+	// messages are dropped below, and paging raw entries first would serve
+	// empty pages whenever the newest stretch of the log is protocol
+	// traffic (an MCP agent conversation is mostly frames). clientdb parses
+	// the entire file per call regardless, so reading it all costs nothing
+	// extra.
 	var entries []clientdb.PMLogEntry
 	err := s.DB.View(r.Context(), func(tx clientdb.ReadTx) error {
-		got, err := s.DB.ReadLogPM(tx, uid, pageSize, pageNum)
+		got, err := s.DB.ReadLogPM(tx, uid, math.MaxInt32, 0)
 		if err != nil {
 			return err
 		}
@@ -396,7 +403,7 @@ func (s *StatusServer) handleHistoryPM(w http.ResponseWriter, r *http.Request) {
 		}
 		filtered = append(filtered, e)
 	}
-	entries = filtered
+	entries = historyPage(filtered, pageSize, pageNum)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(struct {
 		UID      string                `json:"uid"`
