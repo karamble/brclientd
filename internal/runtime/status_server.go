@@ -31,6 +31,7 @@ import (
 	"github.com/karamble/brmcp/bridge"
 
 	"github.com/karamble/brclientd/internal/certgen"
+	"github.com/karamble/brclientd/internal/gaming"
 	"github.com/karamble/brclientd/internal/identity"
 	"github.com/karamble/brclientd/internal/msig"
 )
@@ -390,8 +391,10 @@ func (s *StatusServer) handleHistoryPM(w http.ResponseWriter, r *http.Request) {
 	}
 	// Apply active content filters to served history (the dashboard renders it
 	// verbatim). FilterPM gets the conversation uid, so uid-scoped PM rules work.
-	// MCP envelope frames are agent protocol traffic, not chat; they are
-	// hidden unconditionally so no user filter is ever needed for them.
+	// MCP and gaming envelope frames are protocol traffic, not chat; they are
+	// hidden unconditionally so no user filter is ever needed for them. Gaming
+	// frames ride PMs too: a table's invite arrives before its group chat
+	// exists.
 	c := s.currentClient()
 	filtered := entries[:0]
 	for _, e := range entries {
@@ -401,6 +404,9 @@ func (s *StatusServer) handleHistoryPM(w http.ResponseWriter, r *http.Request) {
 		// Shared-wallet coordination frames get the same treatment; the
 		// dashboard replays them via /msig/history instead.
 		if msig.IsEnvelope(e.Message) {
+			continue
+		}
+		if gaming.IsEnvelope(e.Message) {
 			continue
 		}
 		if c != nil {
