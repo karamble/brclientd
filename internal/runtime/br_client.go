@@ -27,6 +27,8 @@ import (
 	"github.com/decred/go-socks/socks"
 	"github.com/decred/slog"
 	"github.com/karamble/brmcp"
+
+	"github.com/karamble/brclientd/internal/msig"
 )
 
 // buildBRDownloadTag renders the inline download-chip tag the dashboard parses
@@ -1252,6 +1254,22 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 			// the MCP engine; they are not chat and must not badge the
 			// UI or unarchive contacts.
 			if brmcp.IsEnvelope(pm.Message) {
+				return
+			}
+			// Shared-wallet coordination frames are dashboard protocol
+			// traffic: surfaced under their own event type for the msig
+			// engine, never as chat, and they must not badge the UI or
+			// unarchive contacts either.
+			if msig.IsEnvelope(pm.Message) {
+				notifs.Publish(NotifEvent{
+					Type:      "msig",
+					Timestamp: ts,
+					Payload: map[string]any{
+						"from":     ru.ID().String(),
+						"fromNick": ru.Nick(),
+						"message":  pm.Message,
+					},
+				})
 				return
 			}
 			// A new message returns auto-archived (non-pinned) contacts

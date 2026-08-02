@@ -13,6 +13,8 @@ import (
 	"github.com/companyzero/bisonrelay/client/clientdb"
 	"github.com/companyzero/bisonrelay/zkidentity"
 	"github.com/karamble/brmcp"
+
+	"github.com/karamble/brclientd/internal/msig"
 )
 
 // connectionOut is the wire shape of GET /connection. "online" is the last
@@ -285,6 +287,14 @@ func (s *StatusServer) handleFilters(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "regexp matches MCP protocol frames (--mcp[...]--); "+
 				"filtering them would break MCP over Bison Relay, and they "+
 				"are already hidden from chat", http.StatusBadRequest)
+			return
+		}
+		// Same rationale for shared-wallet frames: a matching rule would
+		// silently sever multisig coordination.
+		if !req.SkipPMs && re.MatchString(msig.SampleEnvelope) {
+			http.Error(w, "regexp matches shared-wallet protocol frames (--msig[...]--); "+
+				"filtering them would break multisig coordination over Bison Relay, "+
+				"and they are already hidden from chat", http.StatusBadRequest)
 			return
 		}
 		cf := clientdb.ContentFilter{

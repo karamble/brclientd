@@ -32,6 +32,7 @@ import (
 
 	"github.com/karamble/brclientd/internal/certgen"
 	"github.com/karamble/brclientd/internal/identity"
+	"github.com/karamble/brclientd/internal/msig"
 )
 
 // StatusServer serves the mTLS HTTP surface dcrpulse-style dashboards use
@@ -181,6 +182,7 @@ func (s *StatusServer) Run(ctx context.Context) error {
 	mux.HandleFunc("/status", s.handleStatus)
 	mux.HandleFunc("/history/pm", s.handleHistoryPM)
 	mux.HandleFunc("/history/pm/clear", s.handleClearPMHistory)
+	mux.HandleFunc("/msig/history", s.handleMsigHistory)
 	mux.HandleFunc("/contacts", s.handleContacts)
 	mux.HandleFunc("/contacts/rename", s.handleRenameContact)
 	mux.HandleFunc("/contacts/groups", s.handleContactGroups)
@@ -394,6 +396,11 @@ func (s *StatusServer) handleHistoryPM(w http.ResponseWriter, r *http.Request) {
 	filtered := entries[:0]
 	for _, e := range entries {
 		if brmcp.IsEnvelope(e.Message) {
+			continue
+		}
+		// Shared-wallet coordination frames get the same treatment; the
+		// dashboard replays them via /msig/history instead.
+		if msig.IsEnvelope(e.Message) {
 			continue
 		}
 		if c != nil {
