@@ -7,6 +7,7 @@ package runtime
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 )
 
 // handleResourceRequests lets a third-party service dock on the resources
@@ -45,12 +46,24 @@ func (s *StatusServer) handleResourceRequests(w http.ResponseWriter, r *http.Req
 	s.Log.Infof("resources interface docked by %s", peerCommonName(r))
 	defer s.Log.Infof("resources interface undocked (%s)", peerCommonName(r))
 
+	// The keepalive is a bare newline, not a typed event: docked services
+	// decode resourceRequestEvent and answer by correlation id, so a typed
+	// heartbeat would arrive as a bogus id-0 request. json.Decoder skips
+	// inter-value whitespace, making the newline invisible to every consumer
+	// while still defeating NAT and middlebox idle timeouts.
+	keepalive := time.NewTicker(streamKeepaliveInterval)
+	defer keepalive.Stop()
 	enc := json.NewEncoder(w)
 	ctx := r.Context()
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-keepalive.C:
+			if _, err := w.Write([]byte("\n")); err != nil {
+				return
+			}
+			flusher.Flush()
 		case evt := <-ch:
 			if err := enc.Encode(evt); err != nil {
 				return

@@ -3092,6 +3092,11 @@ func (s *StatusServer) handleClearNotifications(w http.ResponseWriter, r *http.R
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// streamKeepaliveInterval is how often the long-lived NDJSON streams write
+// a heartbeat on an otherwise idle connection, so clients and middleboxes
+// never mistake a quiet stream for a dead one.
+const streamKeepaliveInterval = 30 * time.Second
+
 func (s *StatusServer) handleNotifications(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -3113,12 +3118,22 @@ func (s *StatusServer) handleNotifications(w http.ResponseWriter, r *http.Reques
 
 	ch, unsub := s.Notifs.Subscribe()
 	defer unsub()
+	// Keepalives are written per connection rather than published on the
+	// bus, so heartbeats never consume subscriber buffer space. They give
+	// clients a way to tell an idle stream from a dead connection.
+	keepalive := time.NewTicker(streamKeepaliveInterval)
+	defer keepalive.Stop()
 	enc := json.NewEncoder(w)
 	ctx := r.Context()
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-keepalive.C:
+			if err := enc.Encode(NotifEvent{Type: "keepalive", Timestamp: time.Now()}); err != nil {
+				return
+			}
+			flusher.Flush()
 		case evt, ok := <-ch:
 			if !ok {
 				return
