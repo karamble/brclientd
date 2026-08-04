@@ -11,7 +11,7 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/jessevdk/go-flags v1.6.1
 	github.com/jrick/logrotate v1.1.2
-	github.com/karamble/brmcp v0.1.1-0.20260731131055-9e168ca9373e
+	github.com/karamble/brmcp v0.1.1-0.20260804104404-333adf7bfe50
 	github.com/pelletier/go-toml v1.9.5
 	golang.org/x/sync v0.20.0
 )

@@ -220,7 +220,7 @@ config file).
 
 | Route | Purpose |
 | ----- | ------- |
-| `/settings/mcpclient` | MCP client settings: enable, token, mode, caps, allowed bots |
+| `/settings/mcpclient` | MCP client settings: enable, token, mode, caps, allowed bots, allowed IPs |
 | `/mcp/pending` | payments waiting for approval |
 | `/mcp/pending/resolve` | approve or deny a pending payment |
 | `/mcp/spend` | recorded payments and spend totals |
@@ -257,8 +257,13 @@ same way. Paid tools settle as Bison Relay tips under the configured
 caps, automatically or after explicit approval. The agent never handles
 identity, transport, or payments; it just sees tools.
 
-Off by default. Requests must carry the bearer token from the settings.
-The listen address comes from the `[mcp options]` config section
-(`mcp.mcplisten`, default `127.0.0.1:8891`) and takes effect on restart;
-everything else is runtime configuration via `/settings/mcpclient` on
-the status REST.
+Off by default. Requests must carry the bearer token from the settings,
+and `allowed_ips` optionally restricts the source addresses the listener
+accepts (single IPs or CIDR ranges; empty means any address) - a request
+from anywhere else is answered with the same generic 401 as a bad token.
+The settings reply carries `last_denied` (the most recent denied address
+and time, cleared by the next successful request) so the dashboard can
+offer the observed address for allowing. The listen address comes from
+the `[mcp options]` config section (`mcp.mcplisten`, default
+`127.0.0.1:8891`) and takes effect on restart; everything else is runtime
+configuration via `/settings/mcpclient` on the status REST.

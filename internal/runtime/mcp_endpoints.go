@@ -37,6 +37,14 @@ func mcpWriteJSON(w http.ResponseWriter, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+// mcpSettingsReply is the settings reply plus the listener's most recent
+// allowed-IP denial (in-memory, cleared by the agent's next successful
+// request) so the dashboard can offer the observed address for allowing.
+type mcpSettingsReply struct {
+	bridge.Settings
+	LastDenied *bridge.DeniedAttempt `json:"last_denied,omitempty"`
+}
+
 // handleMCPSettings serves GET/POST /settings/mcpclient.
 func (s *StatusServer) handleMCPSettings(w http.ResponseWriter, r *http.Request) {
 	b := s.mcpBridgeOr503(w)
@@ -45,7 +53,7 @@ func (s *StatusServer) handleMCPSettings(w http.ResponseWriter, r *http.Request)
 	}
 	switch r.Method {
 	case http.MethodGet:
-		mcpWriteJSON(w, b.Settings())
+		mcpWriteJSON(w, mcpSettingsReply{Settings: b.Settings(), LastDenied: b.LastDenied()})
 	case http.MethodPost:
 		var req bridge.Settings
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -56,7 +64,7 @@ func (s *StatusServer) handleMCPSettings(w http.ResponseWriter, r *http.Request)
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		mcpWriteJSON(w, b.Settings())
+		mcpWriteJSON(w, mcpSettingsReply{Settings: b.Settings(), LastDenied: b.LastDenied()})
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
