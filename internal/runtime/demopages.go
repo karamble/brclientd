@@ -13,6 +13,7 @@ import (
 )
 
 // all: is required so files beginning with "_" or "." are embedded too.
+//
 //go:embed all:demopages
 var demoPagesFS embed.FS
 

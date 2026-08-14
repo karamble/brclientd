@@ -161,18 +161,18 @@ func (s *StatusServer) requireRTDTClient(w http.ResponseWriter, r *http.Request,
 // just the fields the dashboard needs to render the room list; the full
 // AppointCookie / SessionCookie / OwnerSecret are kept server-side.
 type rtdtSessionSummary struct {
-	RV          string                  `json:"rv"`
-	Description string                  `json:"description"`
-	Size        uint32                  `json:"size"`
-	Owner       string                  `json:"owner"`
-	IsInstant   bool                    `json:"is_instant"`
-	LocalPeerID uint32                  `json:"local_peer_id"`
-	IsAdmin     bool                    `json:"is_admin"`
-	Live        bool                    `json:"live"`
-	HotAudio    bool                    `json:"hot_audio"`
-	Members     []rtdtMemberSummary     `json:"members"`
-	Publishers  []rtdtPublisherSummary  `json:"publishers"`
-	LivePeers   []rtdtLivePeerSummary   `json:"live_peers,omitempty"`
+	RV          string                 `json:"rv"`
+	Description string                 `json:"description"`
+	Size        uint32                 `json:"size"`
+	Owner       string                 `json:"owner"`
+	IsInstant   bool                   `json:"is_instant"`
+	LocalPeerID uint32                 `json:"local_peer_id"`
+	IsAdmin     bool                   `json:"is_admin"`
+	Live        bool                   `json:"live"`
+	HotAudio    bool                   `json:"hot_audio"`
+	Members     []rtdtMemberSummary    `json:"members"`
+	Publishers  []rtdtPublisherSummary `json:"publishers"`
+	LivePeers   []rtdtLivePeerSummary  `json:"live_peers,omitempty"`
 }
 
 type rtdtMemberSummary struct {
@@ -481,4 +481,3 @@ func (s *StatusServer) handleRTDTRotateCookies(w http.ResponseWriter, r *http.Re
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
-

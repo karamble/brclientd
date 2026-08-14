@@ -19,15 +19,16 @@ import (
 
 // Wire frame format for /rtdt/sessions/{rv}/audio:
 //
-//   +---------+-----------+--------------+-----------------+
-//   | ver (1) | dir (1)   | peerID (4)BE | opus payload    |
-//   +---------+-----------+--------------+-----------------+
+//	+---------+-----------+--------------+-----------------+
+//	| ver (1) | dir (1)   | peerID (4)BE | opus payload    |
+//	+---------+-----------+--------------+-----------------+
 //
 // ver  = 0x01
 // dir  = 0x01 inbound (server -> browser; peerID is the publisher)
-//      = 0x02 outbound (browser -> server; peerID ignored, brclientd is
-//                       always the publisher because the BR identity is
-//                       single-tenant per daemon)
+//
+//	= 0x02 outbound (browser -> server; peerID ignored, brclientd is
+//	                 always the publisher because the BR identity is
+//	                 single-tenant per daemon)
 const (
 	rtdtFrameVersion    byte = 0x01
 	rtdtFrameDirInbound byte = 0x01
@@ -95,11 +96,11 @@ func (s *wsAudioSink) OnSpeech(peerID rpc.RTDTPeerID, opus []byte, timestamp uin
 // handleRTDTAudioWS upgrades to a binary WebSocket for one specific RTDT
 // session. Both directions multiplex on the same conn using the frame
 // format above. Cleanup teardowns:
-//  - Register/Unregister the WS as the AudioRouter sink (only one per rv;
-//    second tab gets 409)
-//  - Outbound pump runs in a goroutine, reads WS frames, calls
-//    SendSpeechPacket on the live BR session
-//  - On WS close or context done, both pumps exit and the sink unregisters
+//   - Register/Unregister the WS as the AudioRouter sink (only one per rv;
+//     second tab gets 409)
+//   - Outbound pump runs in a goroutine, reads WS frames, calls
+//     SendSpeechPacket on the live BR session
+//   - On WS close or context done, both pumps exit and the sink unregisters
 func (s *StatusServer) handleRTDTAudioWS(w http.ResponseWriter, r *http.Request, rv zkidentity.ShortID) {
 	if s.Log != nil {
 		s.Log.Infof("RTDT audio: upgrade request rv=%s upgrade-hdr=%q", rv.ShortLogID(), r.Header.Get("Upgrade"))

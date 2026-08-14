@@ -14,6 +14,7 @@ import (
 
 // all: is required so files beginning with "_" (e.g. _cover.tmpl, the managed
 // cover partial) are embedded; the default go:embed pattern excludes them.
+//
 //go:embed all:demostore
 var demoStoreFS embed.FS
 

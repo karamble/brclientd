@@ -31,15 +31,15 @@ import (
 
 // Config bundles every parameter runtime.Run needs.
 type Config struct {
-	Log               slog.Logger
-	LogFn             func(subsys string) slog.Logger
-	Certs             certgen.Triplet
-	ClientRPCListen   []string
-	StatusListen      string
-	MCPListen         string
-	AppName           string
-	AppVersion        string
-	BRServer          string
+	Log             slog.Logger
+	LogFn           func(subsys string) slog.Logger
+	Certs           certgen.Triplet
+	ClientRPCListen []string
+	StatusListen    string
+	MCPListen       string
+	AppName         string
+	AppVersion      string
+	BRServer        string
 	// BRServerDirect dials BRServer directly as the relay instead of
 	// resolving it through a seeder query.
 	BRServerDirect bool
