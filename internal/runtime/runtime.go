@@ -103,7 +103,7 @@ func Run(ctx context.Context, cfg Config) error {
 	defer cancel()
 
 	tracker := NewTracker(cfg.Log)
-	notifs := newNotifBus()
+	notifs := newNotifBus(cfg.LogFn("NOTF"))
 	audioRouter := NewRTDTAudioRouter(cfg.LogFn("RTAU"))
 	reinvites := newGCReinviteTracker()
 	unrepl := newUnreplTracker()

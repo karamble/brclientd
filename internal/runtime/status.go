@@ -52,6 +52,24 @@ type QueueStats struct {
 	RVsUpToDate bool `json:"rvs_up_to_date"`
 }
 
+// notifStats reports the notification bus's live subscriber count and how many
+// events it has had to discard. Reported beside the relay queues because it is
+// the same kind of fact: a queue overflowing is the early sign that something
+// downstream is not keeping up, and a dropped notification is a fact no
+// consumer can otherwise discover.
+type notifStats struct {
+	Subscribers int    `json:"subscribers"`
+	Dropped     uint64 `json:"dropped"`
+}
+
+func notifStatsOf(b *notifBus) notifStats {
+	if b == nil {
+		return notifStats{}
+	}
+	subs, dropped := b.Counters()
+	return notifStats{Subscribers: subs, Dropped: dropped}
+}
+
 // Tracker holds the current Status with mutex protection and serves both
 // the BR notification callbacks (writers) and the /status HTTP handler
 // (reader).

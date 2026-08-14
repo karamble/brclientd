@@ -156,7 +156,7 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 			return
 		}
 		cfg.Notifs.Publish(NotifEvent{
-			Type: "resource-fetched",
+			Type: pagesEventType,
 			Payload: map[string]any{
 				"uid":             fr.UID.String(),
 				"tag":             uint64(fr.Request.Tag),

@@ -3691,6 +3691,7 @@ func (s *StatusServer) handleStatsNetwork(w http.ResponseWriter, r *http.Request
 		Policy          policyOut     `json:"policy"`
 		RmqQuantiles    []quantileOut `json:"rmq_quantiles"`
 		Queues          QueueStats    `json:"queues"`
+		Notifs          notifStats    `json:"notifs"`
 	}{
 		ServerNode:      status.ServerNode,
 		RecommendedPeer: status.RecommendedPeer,
@@ -3705,6 +3706,7 @@ func (s *StatusServer) handleStatsNetwork(w http.ResponseWriter, r *http.Request
 			SendQDests:  sendqDests,
 			RVsUpToDate: c.RVsUpToDate(),
 		},
+		Notifs: notifStatsOf(s.Notifs),
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(out)

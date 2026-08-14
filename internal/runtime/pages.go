@@ -75,7 +75,13 @@ func (s *StatusServer) handlePagesFetch(w http.ResponseWriter, r *http.Request) 
 	// Subscribe before issuing the fetch: FetchLocalResource fires the
 	// resource-fetched notification synchronously during the call, so the
 	// subscription must already be live to catch it.
-	ch, unsub := s.Notifs.Subscribe()
+	//
+	// Filtered, because this waits for one event on a bus that carries every
+	// other kind. An unfiltered subscription here can have the reply it is
+	// waiting for evicted by a burst of unrelated traffic - a file transfer
+	// publishes per chunk - and then waits out the request context for a
+	// message that already came and went.
+	ch, unsub := s.Notifs.SubscribeFiltered(pagesEventType)
 	defer unsub()
 
 	uidHex := uid.String()
@@ -127,7 +133,7 @@ func (s *StatusServer) handlePagesFetch(w http.ResponseWriter, r *http.Request) 
 				http.Error(w, "notification stream closed", http.StatusBadGateway)
 				return
 			}
-			if evt.Type != "resource-fetched" || !pagesEventMatches(evt, uidHex, wantTag, req.Path, req.AsyncTargetID) {
+			if evt.Type != pagesEventType || !pagesEventMatches(evt, uidHex, wantTag, req.Path, req.AsyncTargetID) {
 				continue
 			}
 			out := map[string]any{
@@ -162,6 +168,10 @@ func parsePageUID(s string) (zkidentity.ShortID, error) {
 	copy(uid[:], raw)
 	return uid, nil
 }
+
+// pagesEventType is the one event this handler waits for, named once so the
+// subscription filter and the match cannot drift apart.
+const pagesEventType = "resource-fetched"
 
 // pagesEventMatches reports whether a resource-fetched event is the reply to
 // the fetch we just issued. Remote replies correlate by the request tag
