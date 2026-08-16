@@ -257,7 +257,7 @@ func TestRouteBehavior(t *testing.T) {
 			t.Fatal("fixture lost the encoded slash: RawPath is empty")
 		}
 		rr := httptest.NewRecorder()
-		s.routes().ServeHTTP(rr, req)
+		s.handler().ServeHTTP(rr, req)
 		if rr.Code != http.StatusMethodNotAllowed {
 			t.Fatalf("status = %d, want 405", rr.Code)
 		}
@@ -285,7 +285,7 @@ func TestRouteBehavior(t *testing.T) {
 		{http.MethodPost, "/gc/" + probeID + "/kill", http.StatusServiceUnavailable, "BR client not yet running", "", false, false, ""},
 		{http.MethodPost, "/rtdt/sessions/" + probeID + "/dissolve", http.StatusServiceUnavailable, "BR client not yet running", "", false, false, ""},
 		{http.MethodPost, "/gc/" + probeID + "/history/clear", http.StatusServiceUnavailable, "history paths not configured", "", false, false, ""},
-		{http.MethodPost, "/gc/" + probeID + "/../../contacts/reset-all", http.StatusTemporaryRedirect, "", "/contacts/reset-all", false, false, ""},
+		{http.MethodPost, "/gc/" + probeID + "/../../contacts/reset-all", http.StatusBadRequest, "path not canonical", "", false, false, ""},
 		{http.MethodGet, "/gc/", http.StatusNotFound, "404 page not found", "", false, false, ""},
 		{http.MethodGet, "/rtdt/sessions/", http.StatusNotFound, "404 page not found", "", false, false, ""},
 		{http.MethodGet, "/gc/" + probeID + "/", http.StatusNotFound, "404 page not found", "", false, false, ""},
@@ -311,7 +311,7 @@ func TestRouteBehavior(t *testing.T) {
 	}
 
 	s := &StatusServer{Settings: &brSettingsStore{}}
-	mux := s.routes()
+	h := s.handler()
 	for _, row := range rows {
 		t.Run(row.method+" "+row.target, func(t *testing.T) {
 			req := httptest.NewRequest(row.method, row.target, nil)
@@ -319,7 +319,7 @@ func TestRouteBehavior(t *testing.T) {
 				t.Fatal("fixture lost the encoded slash: RawPath is empty")
 			}
 			rr := httptest.NewRecorder()
-			mux.ServeHTTP(rr, req)
+			h.ServeHTTP(rr, req)
 			if rr.Code != row.status {
 				t.Fatalf("status = %d, want %d (body %q)", rr.Code, row.status, rr.Body.String())
 			}

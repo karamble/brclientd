@@ -13,6 +13,7 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -333,6 +334,32 @@ func (s *StatusServer) routes() *http.ServeMux {
 	return mux
 }
 
+// handler wraps the route table: ServeMux 307s a path containing ".." or
+// "//" to the cleaned path and callers that follow it replay the body there.
+func (s *StatusServer) handler() http.Handler {
+	mux := s.routes()
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.RequestURI != "*" && !canonicalPath(r.URL.EscapedPath()) {
+			http.Error(w, "path not canonical", http.StatusBadRequest)
+			return
+		}
+		mux.ServeHTTP(w, r)
+	})
+}
+
+// canonicalPath mirrors net/http's cleanPath: path.Clean plus re-appended
+// trailing slash. True means ServeMux would not redirect this path.
+func canonicalPath(p string) bool {
+	if p == "" || p[0] != '/' {
+		return false
+	}
+	cp := path.Clean(p)
+	if cp != "/" && strings.HasSuffix(p, "/") {
+		cp += "/"
+	}
+	return cp == p
+}
+
 // Run blocks until ctx is cancelled or the server fails.
 func (s *StatusServer) Run(ctx context.Context) error {
 	tlsCfg, err := s.Certs.LoadServerTLSConfig()
@@ -340,11 +367,9 @@ func (s *StatusServer) Run(ctx context.Context) error {
 		return fmt.Errorf("status: load tls config: %w", err)
 	}
 
-	mux := s.routes()
-
 	srv := &http.Server{
 		Addr:              s.Listen,
-		Handler:           mux,
+		Handler:           s.handler(),
 		TLSConfig:         tlsCfg,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
