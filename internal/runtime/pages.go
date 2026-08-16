@@ -34,10 +34,6 @@ import (
 // reply arrives via the resource-fetched notification (see br_client.go), so
 // we subscribe to the notif bus before issuing the fetch.
 func (s *StatusServer) handlePagesFetch(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	c := s.currentClient()
 	if c == nil {
 		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
@@ -223,10 +219,6 @@ func validatePageName(name string) (string, bool) {
 
 // handlePagesLocalList lists the markdown files this node hosts from PagesDir.
 func (s *StatusServer) handlePagesLocalList(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	if s.PagesDir == "" {
 		http.Error(w, "pages dir not configured", http.StatusServiceUnavailable)
 		return
@@ -270,10 +262,6 @@ func (s *StatusServer) handlePagesLocalList(w http.ResponseWriter, r *http.Reque
 
 // handlePagesLocalFile returns the raw markdown of one hosted page. Query: name.
 func (s *StatusServer) handlePagesLocalFile(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	if s.PagesDir == "" {
 		http.Error(w, "pages dir not configured", http.StatusServiceUnavailable)
 		return
@@ -299,10 +287,6 @@ func (s *StatusServer) handlePagesLocalFile(w http.ResponseWriter, r *http.Reque
 // handlePagesLocalSave writes (creates or overwrites) one hosted page. Body:
 // {name, content}.
 func (s *StatusServer) handlePagesLocalSave(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	if s.PagesDir == "" {
 		http.Error(w, "pages dir not configured", http.StatusServiceUnavailable)
 		return
@@ -380,10 +364,6 @@ const maxImportEmbedBytes = 512 << 10
 // image path inside PagesDir. Both sides resolve through os.Root, so neither
 // traversal nor symlinks can escape their directory. Imports never overwrite.
 func (s *StatusServer) handlePagesLocalImportEmbed(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	if s.PagesDir == "" {
 		http.Error(w, "pages dir not configured", http.StatusServiceUnavailable)
 		return
@@ -501,10 +481,6 @@ func (s *StatusServer) handlePagesLocalImportEmbed(w http.ResponseWriter, r *htt
 
 // handlePagesLocalDelete removes one hosted page. Body: {name}.
 func (s *StatusServer) handlePagesLocalDelete(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	if s.PagesDir == "" {
 		http.Error(w, "pages dir not configured", http.StatusServiceUnavailable)
 		return

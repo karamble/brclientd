@@ -116,10 +116,6 @@ func (s *StatusServer) handleBehavior(w http.ResponseWriter, r *http.Request) {
 // handleKXSearches lists the outstanding KX searches (looking for a post
 // author across the network via its commenters).
 func (s *StatusServer) handleKXSearches(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	c := s.currentClient()
 	if c == nil {
 		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
@@ -357,10 +353,6 @@ func (s *StatusServer) handleFilters(w http.ResponseWriter, r *http.Request) {
 
 // handleDeleteFilter removes a content filter by id.
 func (s *StatusServer) handleDeleteFilter(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	c := s.currentClient()
 	if c == nil {
 		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
@@ -385,10 +377,6 @@ func (s *StatusServer) handleDeleteFilter(w http.ResponseWriter, r *http.Request
 // so it can take a while on large address books; it returns once all are
 // queued.
 func (s *StatusServer) handleSubscribeAllPosts(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	c := s.currentClient()
 	if c == nil {
 		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
@@ -417,10 +405,6 @@ type kxOut struct {
 // handleKXList reports the in-flight key exchanges (including reset KXs) as
 // a diagnostic for the Settings tab.
 func (s *StatusServer) handleKXList(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	c := s.currentClient()
 	if c == nil {
 		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)

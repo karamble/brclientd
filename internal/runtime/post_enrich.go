@@ -370,10 +370,6 @@ const maxEmbedServeBytes = 16 << 20
 // content-addressed and immutable, so responses carry a long-lived cache
 // header.
 func (s *StatusServer) handlePostsEmbedData(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	c := s.currentClient()
 	if c == nil {
 		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)

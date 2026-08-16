@@ -168,6 +168,15 @@ func (s *StatusServer) currentClient() *client.Client {
 	return s.client
 }
 
+func (s *StatusServer) requireClient(w http.ResponseWriter) *client.Client {
+	c := s.currentClient()
+	if c == nil {
+		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
+		return nil
+	}
+	return c
+}
+
 func (s *StatusServer) requestRestart() {
 	s.restartOnce.Do(func() { close(s.RestartCh) })
 }
@@ -176,113 +185,151 @@ func (s *StatusServer) requestRestart() {
 // exercise the real route table without a TLS listener.
 func (s *StatusServer) routes() *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/status", s.handleStatus)
-	mux.HandleFunc("/history/pm", s.handleHistoryPM)
-	mux.HandleFunc("/history/pm/clear", s.handleClearPMHistory)
-	mux.HandleFunc("/msig/history", s.handleMsigHistory)
-	mux.HandleFunc("/contacts", s.handleContacts)
-	mux.HandleFunc("/contacts/rename", s.handleRenameContact)
-	mux.HandleFunc("/contacts/groups", s.handleContactGroups)
-	mux.HandleFunc("/contacts/groups/assign", s.handleContactGroupsAssign)
-	mux.HandleFunc("/contacts/groups/settings", s.handleContactGroupsSettings)
-	mux.HandleFunc("/contacts/kx-reset", s.handleKXReset)
-	mux.HandleFunc("/contacts/reset-all", s.handleKXResetAll)
-	mux.HandleFunc("/contacts/block", s.handleBlockContact)
-	mux.HandleFunc("/contacts/blocked", s.handleBlockedContacts)
-	mux.HandleFunc("/contacts/unblock", s.handleUnblockContact)
-	mux.HandleFunc("/contacts/ignore", s.handleIgnoreContact)
-	mux.HandleFunc("/contacts/handshake", s.handleHandshake)
-	mux.HandleFunc("/contacts/suggest-kx", s.handleSuggestKX)
-	mux.HandleFunc("/contacts/trans-reset", s.handleTransReset)
-	mux.HandleFunc("/contacts/accept-suggestion", s.handleAcceptSuggestion)
-	mux.HandleFunc("/contacts/subscribe-posts", s.handleSubscribePosts)
-	mux.HandleFunc("/contacts/unsubscribe-posts", s.handleUnsubscribePosts)
-	mux.HandleFunc("/contacts/list-posts", s.handleListPosts)
-	mux.HandleFunc("/contacts/list-content", s.handleListContent)
-	mux.HandleFunc("/contacts/fetch-post", s.handleFetchPost)
-	mux.HandleFunc("/posts/feed", s.handlePostsFeed)
-	mux.HandleFunc("/posts/body", s.handlePostBody)
-	mux.HandleFunc("/posts/embed-data", s.handlePostsEmbedData)
-	mux.HandleFunc("/posts/comments", s.handlePostComments)
-	mux.HandleFunc("/posts/comment", s.handlePostComment)
-	mux.HandleFunc("/posts/hearts", s.handlePostHearts)
-	mux.HandleFunc("/posts/heart", s.handlePostHeart)
-	mux.HandleFunc("/posts/receivereceipts", s.handlePostReceiveReceipts)
-	mux.HandleFunc("/posts/comment-receivereceipts", s.handlePostCommentReceiveReceipts)
-	mux.HandleFunc("/posts/relay", s.handlePostRelay)
-	mux.HandleFunc("/posts/new", s.handlePostsNew)
-	mux.HandleFunc("/shared-files", s.handleSharedFiles)
-	mux.HandleFunc("/shared-files/add", s.handleSharedFileAdd)
-	mux.HandleFunc("/shared-files/remove", s.handleSharedFileRemove)
-	mux.HandleFunc("/downloads", s.handleDownloads)
-	mux.HandleFunc("/downloads/cancel", s.handleDownloadCancel)
-	mux.HandleFunc("/downloads/delete", s.handleDownloadDelete)
-	mux.HandleFunc("/content/get", s.handleContentGet)
-	mux.HandleFunc("/content/file", s.handleContentFile)
-	mux.HandleFunc("/rates", s.handleRates)
-	mux.HandleFunc("/store/mode", s.handleStoreMode)
-	mux.HandleFunc("/store/products", s.handleStoreProducts)
-	mux.HandleFunc("/store/products/delete", s.handleStoreProductDelete)
-	mux.HandleFunc("/store/orders", s.handleStoreOrders)
-	mux.HandleFunc("/store/orders/status", s.handleStoreOrderStatus)
-	mux.HandleFunc("/store/orders/comment", s.handleStoreOrderComment)
-	mux.HandleFunc("/store/files/upload", s.handleStoreFileUpload)
-	mux.HandleFunc("/store/files/list", s.handleStoreFilesList)
-	mux.HandleFunc("/store/files/get", s.handleStoreFileGet)
-	mux.HandleFunc("/store/files/delete", s.handleStoreFileDelete)
-	mux.HandleFunc("/store/templates", s.handleStoreTemplates)
-	mux.HandleFunc("/store/templates/file", s.handleStoreTemplateFile)
-	mux.HandleFunc("/store/templates/save", s.handleStoreTemplateSave)
-	mux.HandleFunc("/store/templates/delete", s.handleStoreTemplateDelete)
-	mux.HandleFunc("/resources/requests", s.handleResourceRequests)
-	mux.HandleFunc("/resources/fulfill", s.handleResourceFulfill)
-	mux.HandleFunc("/payments/invoice", s.handlePaymentsInvoice)
-	mux.HandleFunc("/payments/invoice/wait", s.handlePaymentsInvoiceWait)
-	mux.HandleFunc("/payments/invoice/status", s.handlePaymentsInvoiceStatus)
-	mux.HandleFunc("/notifications", s.handleNotifications)
-	mux.HandleFunc("/notifications/recent", s.handleRecentNotifications)
-	mux.HandleFunc("/notifications/delete", s.handleDeleteNotification)
-	mux.HandleFunc("/notifications/clear", s.handleClearNotifications)
-	mux.HandleFunc("/version", s.handleVersion)
-	mux.HandleFunc("/public-identity", s.handlePublicIdentity)
-	mux.HandleFunc("/avatar", s.handleSetAvatar)
-	mux.HandleFunc("/messages/send", s.handleSendMessage)
-	mux.HandleFunc("/invites/create", s.handleCreateInvite)
-	mux.HandleFunc("/invites/accept", s.handleAcceptInvite)
-	mux.HandleFunc("/tip", s.handleTip)
-	mux.HandleFunc("/payments/tips", s.handleTipAttempts)
-	mux.HandleFunc("/payments/tips/running", s.handleRunningTipAttempts)
-	mux.HandleFunc("/invites/redeem-key", s.handleRedeemPaidInvite)
-	mux.HandleFunc("/files/send", s.handleSendFile)
-	mux.HandleFunc("/stats/overview", s.handleStatsOverview)
-	mux.HandleFunc("/stats/payments", s.handleStatsPayments)
-	mux.HandleFunc("/stats/payments/clear", s.handleClearPayStats)
-	mux.HandleFunc("/stats/network", s.handleStatsNetwork)
-	mux.HandleFunc("/stats/contacts", s.handleStatsContacts)
-	mux.HandleFunc("/stats/posts", s.handleStatsPosts)
-	mux.HandleFunc("/rtdt/sessions", s.handleRTDT)
-	mux.HandleFunc("/rtdt/sessions/", s.handleRTDT)
-	mux.HandleFunc("/gc", s.handleGC)
-	mux.HandleFunc("/gc/", s.handleGC)
-	mux.HandleFunc("/pages/fetch", s.handlePagesFetch)
-	mux.HandleFunc("/pages/local", s.handlePagesLocalList)
-	mux.HandleFunc("/pages/local/file", s.handlePagesLocalFile)
-	mux.HandleFunc("/pages/local/save", s.handlePagesLocalSave)
-	mux.HandleFunc("/pages/local/import-embed", s.handlePagesLocalImportEmbed)
-	mux.HandleFunc("/pages/local/delete", s.handlePagesLocalDelete)
-	mux.HandleFunc("/backup", s.handleBackup)
-	mux.HandleFunc("/connection", s.handleConnection)
-	mux.HandleFunc("/settings/behavior", s.handleBehavior)
-	mux.HandleFunc("/settings/mcpclient", s.handleMCPSettings)
-	mux.HandleFunc("/mcp/pending", s.handleMCPPending)
-	mux.HandleFunc("/mcp/pending/resolve", s.handleMCPPendingResolve)
-	mux.HandleFunc("/mcp/spend", s.handleMCPSpend)
-	mux.HandleFunc("/filters", s.handleFilters)
-	mux.HandleFunc("/filters/delete", s.handleDeleteFilter)
-	mux.HandleFunc("/posts/subscribe-all", s.handleSubscribeAllPosts)
-	mux.HandleFunc("/kx/list", s.handleKXList)
-	mux.HandleFunc("/kx/searches", s.handleKXSearches)
-	mux.HandleFunc("/kx/mediateids", s.handleMediateIDs)
+	mux.HandleFunc("GET /status", s.handleStatus)
+	mux.HandleFunc("GET /history/pm", s.handleHistoryPM)
+	mux.HandleFunc("POST /history/pm/clear", s.handleClearPMHistory)
+	mux.HandleFunc("GET /msig/history", s.handleMsigHistory)
+	mux.HandleFunc("GET /contacts", s.handleContacts)
+	mux.HandleFunc("POST /contacts/rename", s.handleRenameContact)
+	mux.HandleFunc("GET /contacts/groups", s.handleContactGroups)
+	mux.HandleFunc("POST /contacts/groups", s.handleContactGroups)
+	mux.HandleFunc("POST /contacts/groups/assign", s.handleContactGroupsAssign)
+	mux.HandleFunc("POST /contacts/groups/settings", s.handleContactGroupsSettings)
+	mux.HandleFunc("POST /contacts/kx-reset", s.handleKXReset)
+	mux.HandleFunc("POST /contacts/reset-all", s.handleKXResetAll)
+	mux.HandleFunc("POST /contacts/block", s.handleBlockContact)
+	mux.HandleFunc("GET /contacts/blocked", s.handleBlockedContacts)
+	mux.HandleFunc("POST /contacts/unblock", s.handleUnblockContact)
+	mux.HandleFunc("POST /contacts/ignore", s.handleIgnoreContact)
+	mux.HandleFunc("POST /contacts/handshake", s.handleHandshake)
+	mux.HandleFunc("POST /contacts/suggest-kx", s.handleSuggestKX)
+	mux.HandleFunc("POST /contacts/trans-reset", s.handleTransReset)
+	mux.HandleFunc("POST /contacts/accept-suggestion", s.handleAcceptSuggestion)
+	mux.HandleFunc("POST /contacts/subscribe-posts", s.handleSubscribePosts)
+	mux.HandleFunc("POST /contacts/unsubscribe-posts", s.handleUnsubscribePosts)
+	mux.HandleFunc("POST /contacts/list-posts", s.handleListPosts)
+	mux.HandleFunc("POST /contacts/list-content", s.handleListContent)
+	mux.HandleFunc("POST /contacts/fetch-post", s.handleFetchPost)
+	mux.HandleFunc("GET /posts/feed", s.handlePostsFeed)
+	mux.HandleFunc("GET /posts/body", s.handlePostBody)
+	mux.HandleFunc("GET /posts/embed-data", s.handlePostsEmbedData)
+	mux.HandleFunc("GET /posts/comments", s.handlePostComments)
+	mux.HandleFunc("POST /posts/comment", s.handlePostComment)
+	mux.HandleFunc("GET /posts/hearts", s.handlePostHearts)
+	mux.HandleFunc("POST /posts/heart", s.handlePostHeart)
+	mux.HandleFunc("GET /posts/receivereceipts", s.handlePostReceiveReceipts)
+	mux.HandleFunc("GET /posts/comment-receivereceipts", s.handlePostCommentReceiveReceipts)
+	mux.HandleFunc("POST /posts/relay", s.handlePostRelay)
+	mux.HandleFunc("POST /posts/new", s.handlePostsNew)
+	mux.HandleFunc("GET /shared-files", s.handleSharedFiles)
+	mux.HandleFunc("POST /shared-files/add", s.handleSharedFileAdd)
+	mux.HandleFunc("POST /shared-files/remove", s.handleSharedFileRemove)
+	mux.HandleFunc("GET /downloads", s.handleDownloads)
+	mux.HandleFunc("POST /downloads/cancel", s.handleDownloadCancel)
+	mux.HandleFunc("POST /downloads/delete", s.handleDownloadDelete)
+	mux.HandleFunc("POST /content/get", s.handleContentGet)
+	mux.HandleFunc("GET /content/file", s.handleContentFile)
+	mux.HandleFunc("GET /rates", s.handleRates)
+	mux.HandleFunc("GET /store/mode", s.handleStoreMode)
+	mux.HandleFunc("POST /store/mode", s.handleStoreMode)
+	mux.HandleFunc("GET /store/products", s.handleStoreProducts)
+	mux.HandleFunc("POST /store/products", s.handleStoreProducts)
+	mux.HandleFunc("POST /store/products/delete", s.handleStoreProductDelete)
+	mux.HandleFunc("GET /store/orders", s.handleStoreOrders)
+	mux.HandleFunc("POST /store/orders/status", s.handleStoreOrderStatus)
+	mux.HandleFunc("POST /store/orders/comment", s.handleStoreOrderComment)
+	mux.HandleFunc("POST /store/files/upload", s.handleStoreFileUpload)
+	mux.HandleFunc("GET /store/files/list", s.handleStoreFilesList)
+	mux.HandleFunc("GET /store/files/get", s.handleStoreFileGet)
+	mux.HandleFunc("POST /store/files/delete", s.handleStoreFileDelete)
+	mux.HandleFunc("GET /store/templates", s.handleStoreTemplates)
+	mux.HandleFunc("GET /store/templates/file", s.handleStoreTemplateFile)
+	mux.HandleFunc("POST /store/templates/save", s.handleStoreTemplateSave)
+	mux.HandleFunc("POST /store/templates/delete", s.handleStoreTemplateDelete)
+	mux.HandleFunc("GET /resources/requests", s.handleResourceRequests)
+	mux.HandleFunc("POST /resources/fulfill", s.handleResourceFulfill)
+	mux.HandleFunc("POST /payments/invoice", s.handlePaymentsInvoice)
+	mux.HandleFunc("GET /payments/invoice/wait", s.handlePaymentsInvoiceWait)
+	mux.HandleFunc("GET /payments/invoice/status", s.handlePaymentsInvoiceStatus)
+	mux.HandleFunc("GET /notifications", s.handleNotifications)
+	mux.HandleFunc("GET /notifications/recent", s.handleRecentNotifications)
+	mux.HandleFunc("POST /notifications/delete", s.handleDeleteNotification)
+	mux.HandleFunc("POST /notifications/clear", s.handleClearNotifications)
+	mux.HandleFunc("GET /version", s.handleVersion)
+	mux.HandleFunc("GET /public-identity", s.handlePublicIdentity)
+	mux.HandleFunc("POST /avatar", s.handleSetAvatar)
+	mux.HandleFunc("POST /messages/send", s.handleSendMessage)
+	mux.HandleFunc("POST /invites/create", s.handleCreateInvite)
+	mux.HandleFunc("POST /invites/accept", s.handleAcceptInvite)
+	mux.HandleFunc("POST /tip", s.handleTip)
+	mux.HandleFunc("GET /payments/tips", s.handleTipAttempts)
+	mux.HandleFunc("GET /payments/tips/running", s.handleRunningTipAttempts)
+	mux.HandleFunc("POST /invites/redeem-key", s.handleRedeemPaidInvite)
+	mux.HandleFunc("POST /files/send", s.handleSendFile)
+	mux.HandleFunc("GET /stats/overview", s.handleStatsOverview)
+	mux.HandleFunc("GET /stats/payments", s.handleStatsPayments)
+	mux.HandleFunc("POST /stats/payments/clear", s.handleClearPayStats)
+	mux.HandleFunc("GET /stats/network", s.handleStatsNetwork)
+	mux.HandleFunc("GET /stats/contacts", s.handleStatsContacts)
+	mux.HandleFunc("GET /stats/posts", s.handleStatsPosts)
+	// An {rv}/{gcid} value is 64 hex chars, validated by the adapter.
+	mux.HandleFunc("GET /rtdt/sessions", s.handleRTDTList)
+	mux.HandleFunc("POST /rtdt/sessions/create", s.handleRTDTCreate)
+	mux.HandleFunc("POST /rtdt/sessions/create-instant", s.handleRTDTCreateInstant)
+	mux.Handle("POST /rtdt/sessions/{rv}/invite", s.rvHandler(s.handleRTDTInvite))
+	mux.Handle("POST /rtdt/sessions/{rv}/accept", s.rvHandler(s.handleRTDTAccept))
+	mux.Handle("POST /rtdt/sessions/{rv}/join", s.rvHandler(s.handleRTDTJoin))
+	mux.Handle("POST /rtdt/sessions/{rv}/leave", s.rvHandler(s.handleRTDTLeave))
+	mux.Handle("POST /rtdt/sessions/{rv}/dissolve", s.rvHandler(s.handleRTDTDissolve))
+	mux.Handle("POST /rtdt/sessions/{rv}/kick", s.rvHandler(s.handleRTDTKick))
+	mux.Handle("POST /rtdt/sessions/{rv}/remove", s.rvHandler(s.handleRTDTRemove))
+	mux.Handle("POST /rtdt/sessions/{rv}/rotate-cookies", s.rvHandler(s.handleRTDTRotateCookies))
+	mux.Handle("GET /rtdt/sessions/{rv}/audio", s.rvHandler(s.handleRTDTAudioWS))
+	mux.Handle("GET /rtdt/sessions/{rv}/messages", s.rvHandler(s.handleRTDTMessages))
+	mux.Handle("POST /rtdt/sessions/{rv}/chat", s.rvHandler(s.handleRTDTChat))
+	mux.HandleFunc("GET /gc", s.handleGCList)
+	mux.HandleFunc("POST /gc/create", s.handleGCCreate)
+	mux.HandleFunc("GET /gc/invites", s.handleGCInvitesList)
+	mux.HandleFunc("POST /gc/invites/accept", s.handleGCInvitesAccept)
+	mux.Handle("GET /gc/{gcid}", s.gcidHandler(s.handleGCDetail))
+	mux.Handle("POST /gc/{gcid}/invite", s.gcidHandler(s.handleGCInvite))
+	mux.Handle("POST /gc/{gcid}/message", s.gcidHandler(s.handleGCMessage))
+	mux.Handle("GET /gc/{gcid}/history", s.gcidHandler(s.handleGCHistory))
+	mux.Handle("POST /gc/{gcid}/history/clear", s.gcidHandler(s.handleGCClearHistory))
+	mux.Handle("POST /gc/{gcid}/part", s.gcidHandler(s.handleGCPart))
+	mux.Handle("POST /gc/{gcid}/kill", s.gcidHandler(s.handleGCKill))
+	mux.Handle("POST /gc/{gcid}/kick", s.gcidHandler(s.handleGCKick))
+	mux.Handle("POST /gc/{gcid}/block", s.gcidHandler(s.handleGCBlock))
+	mux.Handle("POST /gc/{gcid}/unblock", s.gcidHandler(s.handleGCUnblock))
+	mux.Handle("POST /gc/{gcid}/admins", s.gcidHandler(s.handleGCAdmins))
+	mux.Handle("POST /gc/{gcid}/owner", s.gcidHandler(s.handleGCOwner))
+	mux.Handle("POST /gc/{gcid}/upgrade", s.gcidHandler(s.handleGCUpgrade))
+	mux.Handle("POST /gc/{gcid}/alias", s.gcidHandler(s.handleGCAlias))
+	mux.Handle("POST /gc/{gcid}/resend-list", s.gcidHandler(s.handleGCResendList))
+	mux.HandleFunc("POST /pages/fetch", s.handlePagesFetch)
+	mux.HandleFunc("GET /pages/local", s.handlePagesLocalList)
+	mux.HandleFunc("GET /pages/local/file", s.handlePagesLocalFile)
+	mux.HandleFunc("POST /pages/local/save", s.handlePagesLocalSave)
+	mux.HandleFunc("POST /pages/local/import-embed", s.handlePagesLocalImportEmbed)
+	mux.HandleFunc("POST /pages/local/delete", s.handlePagesLocalDelete)
+	mux.HandleFunc("GET /backup", s.handleBackup)
+	mux.HandleFunc("GET /connection", s.handleConnection)
+	mux.HandleFunc("POST /connection", s.handleConnection)
+	mux.HandleFunc("GET /settings/behavior", s.handleBehavior)
+	mux.HandleFunc("POST /settings/behavior", s.handleBehavior)
+	mux.HandleFunc("GET /settings/mcpclient", s.handleMCPSettings)
+	mux.HandleFunc("POST /settings/mcpclient", s.handleMCPSettings)
+	mux.HandleFunc("GET /mcp/pending", s.handleMCPPending)
+	mux.HandleFunc("POST /mcp/pending/resolve", s.handleMCPPendingResolve)
+	mux.HandleFunc("GET /mcp/spend", s.handleMCPSpend)
+	mux.HandleFunc("GET /filters", s.handleFilters)
+	mux.HandleFunc("POST /filters", s.handleFilters)
+	mux.HandleFunc("POST /filters/delete", s.handleDeleteFilter)
+	mux.HandleFunc("POST /posts/subscribe-all", s.handleSubscribeAllPosts)
+	mux.HandleFunc("GET /kx/list", s.handleKXList)
+	mux.HandleFunc("GET /kx/searches", s.handleKXSearches)
+	mux.HandleFunc("GET /kx/mediateids", s.handleMediateIDs)
+	mux.HandleFunc("POST /kx/mediateids", s.handleMediateIDs)
 	return mux
 }
 
@@ -330,10 +377,6 @@ func (s *StatusServer) Run(ctx context.Context) error {
 }
 
 func (s *StatusServer) handleStatus(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(s.Tracker.Get())
 }
@@ -348,10 +391,6 @@ func (s *StatusServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 // Wraps clientdb.ReadLogPM directly; brclientd remains the source of truth
 // for chat history so dashboard consumers can stay stateless.
 func (s *StatusServer) handleHistoryPM(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	if s.DB == nil {
 		http.Error(w, "history unavailable: clientdb not attached", http.StatusServiceUnavailable)
 		return
@@ -445,10 +484,6 @@ func (s *StatusServer) handleHistoryPM(w http.ResponseWriter, r *http.Request) {
 // 503 until the BR client has been instantiated (i.e. until past the
 // gate / pre-setup phase).
 func (s *StatusServer) handleContacts(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	c := s.currentClient()
 	if c == nil {
 		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
@@ -487,10 +522,6 @@ func (s *StatusServer) handleContacts(w http.ResponseWriter, r *http.Request) {
 // bruig's "Rename User" action (user_context_menu.dart) which calls
 // client.RenameUser at client_kx.go:606.
 func (s *StatusServer) handleRenameContact(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	c := s.currentClient()
 	if c == nil {
 		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
@@ -591,10 +622,6 @@ func (s *StatusServer) handleContactGroups(w http.ResponseWriter, r *http.Reques
 // the regular list). Pinned keeps an archived contact archived when new
 // messages arrive.
 func (s *StatusServer) handleContactGroupsAssign(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	if s.Groups == nil {
 		http.Error(w, "groups store not available", http.StatusServiceUnavailable)
 		return
@@ -624,10 +651,6 @@ func (s *StatusServer) handleContactGroupsAssign(w http.ResponseWriter, r *http.
 // handleContactGroupsSettings updates the auto-archive threshold in days
 // (0 disables the sweeper).
 func (s *StatusServer) handleContactGroupsSettings(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	if s.Groups == nil {
 		http.Error(w, "groups store not available", http.StatusServiceUnavailable)
 		return
@@ -673,10 +696,6 @@ func (s *StatusServer) handleKXReset(w http.ResponseWriter, r *http.Request) {
 // Mirrors brclient's /rresetold. Initiation only: the resets complete via
 // mailbox ping-pong whenever each peer comes online; no state is tracked.
 func (s *StatusServer) handleKXResetAll(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	c := s.currentClient()
 	if c == nil {
 		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
@@ -789,10 +808,6 @@ func (s *StatusServer) handleClearPMHistory(w http.ResponseWriter, r *http.Reque
 // no-op if the user is already in the requested state (client.Ignore itself
 // errors in that case).
 func (s *StatusServer) handleIgnoreContact(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	c := s.currentClient()
 	if c == nil {
 		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
@@ -885,10 +900,6 @@ func (s *StatusServer) writeBlockedUsers(blocked map[string]time.Time) error {
 // client. Blocked users have no address book entry (deleted on block), so only
 // the uid and block time are available.
 func (s *StatusServer) handleBlockedContacts(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	blocked, err := s.readBlockedUsers()
 	if err != nil {
 		http.Error(w, "read blocked users: "+err.Error(), http.StatusInternalServerError)
@@ -972,10 +983,6 @@ func (s *StatusServer) handleHandshake(w http.ResponseWriter, r *http.Request) {
 // the invitee; the user picks the target from their existing contacts.
 // Wraps client.SuggestKX (client_kx.go:636).
 func (s *StatusServer) handleSuggestKX(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req struct {
 		Invitee string `json:"invitee"`
 		Target  string `json:"target"`
@@ -1009,10 +1016,6 @@ func (s *StatusServer) handleSuggestKX(w http.ResponseWriter, r *http.Request) {
 // the user picks the mediator from their existing contacts. Wraps
 // client.RequestTransitiveReset (client_transreset.go:30).
 func (s *StatusServer) handleTransReset(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req struct {
 		Mediator string `json:"mediator"`
 		Target   string `json:"target"`
@@ -1045,10 +1048,6 @@ func (s *StatusServer) handleTransReset(w http.ResponseWriter, r *http.Request) 
 // the mediator (the contact who suggested) to introduce us to the target.
 // Wraps client.RequestMediateIdentity (client_autokx.go:43).
 func (s *StatusServer) handleAcceptSuggestion(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req struct {
 		Mediator string `json:"mediator"`
 		Target   string `json:"target"`
@@ -1174,10 +1173,6 @@ func (s *StatusServer) handleUnsubscribePosts(w http.ResponseWriter, r *http.Req
 // Either way, the post body arrives via OnPostRcvdNtfn which feeds the
 // local feed cache and fires the post-received live event.
 func (s *StatusServer) handleFetchPost(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	c := s.currentClient()
 	if c == nil {
 		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
@@ -1236,10 +1231,6 @@ func (s *StatusServer) handleFetchPost(w http.ResponseWriter, r *http.Request) {
 // own posts. A post whose content file fails to read degrades to its bare
 // summary instead of failing the whole feed.
 func (s *StatusServer) handlePostsFeed(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	c := s.currentClient()
 	if c == nil {
 		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
@@ -1314,10 +1305,6 @@ func (s *StatusServer) handlePostsFeed(w http.ResponseWriter, r *http.Request) {
 // handlePostBody returns the full PostMetadata for the requested
 // (author, post) pair. ?uid=<hex>&pid=<hex>.
 func (s *StatusServer) handlePostBody(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	c := s.currentClient()
 	if c == nil {
 		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
@@ -1356,10 +1343,6 @@ func (s *StatusServer) handlePostBody(w http.ResponseWriter, r *http.Request) {
 // "Link to shared content" picker so authors can reference paid or free
 // downloads inside a post body via --embed[download=,cost=,...]--.
 func (s *StatusServer) handleSharedFiles(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	c := s.currentClient()
 	if c == nil {
 		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
@@ -1406,10 +1389,6 @@ func (s *StatusServer) handleSharedFiles(w http.ResponseWriter, r *http.Request)
 // string = global share). The upload file is read by c.ShareFile into
 // BR's internal content store and removed from UploadDir after.
 func (s *StatusServer) handleSharedFileAdd(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	c := s.currentClient()
 	if c == nil {
 		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
@@ -1489,10 +1468,6 @@ func (s *StatusServer) handleSharedFileAdd(w http.ResponseWriter, r *http.Reques
 // {fid, target_uid?}. target_uid empty = remove the global share entry;
 // otherwise revokes the share with just that user.
 func (s *StatusServer) handleSharedFileRemove(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	c := s.currentClient()
 	if c == nil {
 		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
@@ -1531,10 +1506,6 @@ func (s *StatusServer) handleSharedFileRemove(w http.ResponseWriter, r *http.Req
 // downloads tracked by BR. Sent files (uploads we're serving) are
 // included so the sender side can see progress too.
 func (s *StatusServer) handleDownloads(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	c := s.currentClient()
 	if c == nil {
 		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
@@ -1629,10 +1600,6 @@ func (s *StatusServer) handleDownloads(w http.ResponseWriter, r *http.Request) {
 
 // handleDownloadCancel cancels an in-flight download by FID.
 func (s *StatusServer) handleDownloadCancel(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	c := s.currentClient()
 	if c == nil {
 		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
@@ -1665,10 +1632,6 @@ func (s *StatusServer) handleDownloadCancel(w http.ResponseWriter, r *http.Reque
 // outside <dataDir>/downloads (e.g. shared content under db/content, which Bison
 // Relay manages via unshare, stays untouchable). Body: {fid, uid?}.
 func (s *StatusServer) handleDownloadDelete(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	c := s.currentClient()
 	if c == nil {
 		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
@@ -1734,10 +1697,6 @@ func (s *StatusServer) handleDownloadDelete(w http.ResponseWriter, r *http.Reque
 // surfaces via /downloads and the file-download-progress /
 // file-download-completed events. Body: {uid, fid, max_cost_atoms?}.
 func (s *StatusServer) handleContentGet(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req struct {
 		UID          string `json:"uid"`
 		FID          string `json:"fid"`
@@ -1778,10 +1737,6 @@ func (s *StatusServer) handleContentGet(w http.ResponseWriter, r *http.Request) 
 // The path always comes from the matching download record's DiskPath, never
 // from the request, and only completed downloads (DiskPath set) are served.
 func (s *StatusServer) handleContentFile(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	fidStr := strings.TrimSpace(r.URL.Query().Get("fid"))
 	uidStr := strings.TrimSpace(r.URL.Query().Get("uid"))
 	if fidStr == "" {
@@ -1843,6 +1798,8 @@ func (s *StatusServer) handleContentFile(w http.ResponseWriter, r *http.Request)
 // dir outside the data dir (so it is not walked into itself) and removed
 // after serving.
 func (s *StatusServer) handleBackup(w http.ResponseWriter, r *http.Request) {
+	// HEAD rides every GET mux pattern; without this gate a HEAD would tar
+	// the whole data dir and hold backupMu against real backups.
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -1897,10 +1854,6 @@ func (s *StatusServer) handleBackup(w http.ResponseWriter, r *http.Request) {
 // DCR/USD ticker, throttled by krakenDCRUSD so a sustained BR outage cannot
 // hammer Kraken.
 func (s *StatusServer) handleRates(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	c := s.currentClient()
 	if c == nil {
 		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
@@ -2039,10 +1992,6 @@ func (s *StatusServer) handleStoreProducts(w http.ResponseWriter, r *http.Reques
 
 // handleStoreProductDelete removes a product by SKU. Body: {sku}.
 func (s *StatusServer) handleStoreProductDelete(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	ctrl := s.currentStoreController()
 	if ctrl == nil {
 		http.Error(w, "store controller not yet ready", http.StatusServiceUnavailable)
@@ -2065,10 +2014,6 @@ func (s *StatusServer) handleStoreProductDelete(w http.ResponseWriter, r *http.R
 // handleStoreOrders lists all storefront orders (across customers), newest
 // first.
 func (s *StatusServer) handleStoreOrders(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	ctrl := s.currentStoreController()
 	if ctrl == nil {
 		http.Error(w, "store controller not yet ready", http.StatusServiceUnavailable)
@@ -2087,10 +2032,6 @@ func (s *StatusServer) handleStoreOrders(w http.ResponseWriter, r *http.Request)
 // given relative path, for products to reference via sendfilename (digital
 // downloads). Multipart: path (relative, e.g. ebooks/x.pdf) + file.
 func (s *StatusServer) handleStoreFileUpload(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	ctrl := s.currentStoreController()
 	if ctrl == nil {
 		http.Error(w, "store controller not yet ready", http.StatusServiceUnavailable)
@@ -2131,10 +2072,6 @@ func (s *StatusServer) handleStoreFileUpload(w http.ResponseWriter, r *http.Requ
 // (cover images, banner, digital-download goods) - everything except templates
 // and the operational subdirs.
 func (s *StatusServer) handleStoreFilesList(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	ctrl := s.currentStoreController()
 	if ctrl == nil {
 		http.Error(w, "store controller not yet ready", http.StatusServiceUnavailable)
@@ -2152,10 +2089,6 @@ func (s *StatusServer) handleStoreFilesList(w http.ResponseWriter, r *http.Reque
 // handleStoreFileGet streams one store file's bytes for preview/download.
 // Query: path.
 func (s *StatusServer) handleStoreFileGet(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	ctrl := s.currentStoreController()
 	if ctrl == nil {
 		http.Error(w, "store controller not yet ready", http.StatusServiceUnavailable)
@@ -2179,10 +2112,6 @@ func (s *StatusServer) handleStoreFileGet(w http.ResponseWriter, r *http.Request
 
 // handleStoreFileDelete removes one media file under the store dir. Body: {path}.
 func (s *StatusServer) handleStoreFileDelete(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	ctrl := s.currentStoreController()
 	if ctrl == nil {
 		http.Error(w, "store controller not yet ready", http.StatusServiceUnavailable)
@@ -2205,10 +2134,6 @@ func (s *StatusServer) handleStoreFileDelete(w http.ResponseWriter, r *http.Requ
 // handleStoreTemplates lists the storefront's *.tmpl files (the Go templates
 // the store renders pages from).
 func (s *StatusServer) handleStoreTemplates(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	ctrl := s.currentStoreController()
 	if ctrl == nil {
 		http.Error(w, "store controller not yet ready", http.StatusServiceUnavailable)
@@ -2225,10 +2150,6 @@ func (s *StatusServer) handleStoreTemplates(w http.ResponseWriter, r *http.Reque
 
 // handleStoreTemplateFile returns one template's raw content. Query: name.
 func (s *StatusServer) handleStoreTemplateFile(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	ctrl := s.currentStoreController()
 	if ctrl == nil {
 		http.Error(w, "store controller not yet ready", http.StatusServiceUnavailable)
@@ -2251,10 +2172,6 @@ func (s *StatusServer) handleStoreTemplateFile(w http.ResponseWriter, r *http.Re
 // handleStoreTemplateSave writes (creates or overwrites) one template. Body:
 // {name, content}.
 func (s *StatusServer) handleStoreTemplateSave(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	ctrl := s.currentStoreController()
 	if ctrl == nil {
 		http.Error(w, "store controller not yet ready", http.StatusServiceUnavailable)
@@ -2277,10 +2194,6 @@ func (s *StatusServer) handleStoreTemplateSave(w http.ResponseWriter, r *http.Re
 
 // handleStoreTemplateDelete removes one template. Body: {name}.
 func (s *StatusServer) handleStoreTemplateDelete(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	ctrl := s.currentStoreController()
 	if ctrl == nil {
 		http.Error(w, "store controller not yet ready", http.StatusServiceUnavailable)
@@ -2302,10 +2215,6 @@ func (s *StatusServer) handleStoreTemplateDelete(w http.ResponseWriter, r *http.
 
 // handleStoreOrderStatus updates one order's status. Body: {uid, id, status}.
 func (s *StatusServer) handleStoreOrderStatus(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	ctrl := s.currentStoreController()
 	if ctrl == nil {
 		http.Error(w, "store controller not yet ready", http.StatusServiceUnavailable)
@@ -2330,10 +2239,6 @@ func (s *StatusServer) handleStoreOrderStatus(w http.ResponseWriter, r *http.Req
 // handleStoreOrderComment appends a merchant comment to an order and DMs the
 // buyer. Body: {uid, id, comment}.
 func (s *StatusServer) handleStoreOrderComment(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	ctrl := s.currentStoreController()
 	if ctrl == nil {
 		http.Error(w, "store controller not yet ready", http.StatusServiceUnavailable)
@@ -2429,10 +2334,6 @@ func fetchKrakenDCRUSD(ctx context.Context) (float64, error) {
 // Body: {post (markdown body), descr?}. Returns the created summary so
 // the frontend can navigate to the detail view immediately.
 func (s *StatusServer) handlePostsNew(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	c := s.currentClient()
 	if c == nil {
 		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
@@ -2471,10 +2372,6 @@ func (s *StatusServer) handlePostsNew(w http.ResponseWriter, r *http.Request) {
 // post. Filters out hearts and other non-comment status types so the
 // frontend can render a flat comment list directly.
 func (s *StatusServer) handlePostComments(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	c := s.currentClient()
 	if c == nil {
 		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
@@ -2577,10 +2474,6 @@ func (s *StatusServer) handlePostComments(w http.ResponseWriter, r *http.Request
 // fields: uid (author of the post), pid (post id), comment (text), and
 // optional parent (parent comment id, for threading).
 func (s *StatusServer) handlePostComment(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	c := s.currentClient()
 	if c == nil {
 		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
@@ -2647,10 +2540,6 @@ func (s *StatusServer) handlePostComment(w http.ResponseWriter, r *http.Request)
 // "hearted" state. Walks the same ListPostStatusUpdates that /stats/posts
 // uses, with toggle semantics from rpc.routedrpc.go (1 adds, 0 removes).
 func (s *StatusServer) handlePostHearts(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	c := s.currentClient()
 	if c == nil {
 		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
@@ -2728,10 +2617,6 @@ func (s *StatusServer) handlePostHearts(w http.ResponseWriter, r *http.Request) 
 // Body: {uid, pid, heart bool}. Delegates to client.HeartPost which sends
 // a status update with RMPSHeartYes / RMPSHeartNo.
 func (s *StatusServer) handlePostHeart(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	c := s.currentClient()
 	if c == nil {
 		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
@@ -2768,10 +2653,6 @@ func (s *StatusServer) handlePostHeart(w http.ResponseWriter, r *http.Request) {
 // by others naturally return an empty list. Timestamps are Unix milliseconds
 // (clientdb.ReceiveReceipt).
 func (s *StatusServer) handlePostReceiveReceipts(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	c := s.currentClient()
 	if c == nil {
 		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
@@ -2820,10 +2701,6 @@ func (s *StatusServer) handlePostReceiveReceipts(w http.ResponseWriter, r *http.
 // (RelayPost), otherwise to all of the local client's post subscribers
 // (RelayPostToSubscribers). Body: {uid (post author), pid, to_uid?}.
 func (s *StatusServer) handlePostRelay(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	c := s.currentClient()
 	if c == nil {
 		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
@@ -2871,10 +2748,6 @@ func (s *StatusServer) handlePostRelay(w http.ResponseWriter, r *http.Request) {
 // /posts/comments). Comment receipts are recorded on the post author's node
 // because it relays the comments, so other users' posts return empty.
 func (s *StatusServer) handlePostCommentReceiveReceipts(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	c := s.currentClient()
 	if c == nil {
 		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
@@ -2953,10 +2826,6 @@ type tipAttemptRow struct {
 // handleTipAttempts lists the locally tracked tip attempts to one contact:
 // amounts, retry counts, invoice/payment timestamps, and completion state.
 func (s *StatusServer) handleTipAttempts(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	c := s.currentClient()
 	if c == nil {
 		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
@@ -2998,10 +2867,6 @@ func (s *StatusServer) handleTipAttempts(w http.ResponseWriter, r *http.Request)
 // driving, with the next scheduled action; amounts are joined from the
 // per-user attempt records via the tag.
 func (s *StatusServer) handleRunningTipAttempts(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	c := s.currentClient()
 	if c == nil {
 		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
@@ -3059,10 +2924,6 @@ func (s *StatusServer) handleRunningTipAttempts(w http.ResponseWriter, r *http.R
 // first) that power the dashboard's notification bell. Unlike the live
 // /notifications stream these survive the browser being closed.
 func (s *StatusServer) handleRecentNotifications(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	if s.Notes == nil {
 		http.Error(w, "notification store not configured", http.StatusServiceUnavailable)
 		return
@@ -3080,10 +2941,6 @@ func (s *StatusServer) handleRecentNotifications(w http.ResponseWriter, r *http.
 }
 
 func (s *StatusServer) handleDeleteNotification(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	if s.Notes == nil {
 		http.Error(w, "notification store not configured", http.StatusServiceUnavailable)
 		return
@@ -3100,10 +2957,6 @@ func (s *StatusServer) handleDeleteNotification(w http.ResponseWriter, r *http.R
 }
 
 func (s *StatusServer) handleClearNotifications(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	if s.Notes == nil {
 		http.Error(w, "notification store not configured", http.StatusServiceUnavailable)
 		return
@@ -3118,10 +2971,6 @@ func (s *StatusServer) handleClearNotifications(w http.ResponseWriter, r *http.R
 const streamKeepaliveInterval = 30 * time.Second
 
 func (s *StatusServer) handleNotifications(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	if s.Notifs == nil {
 		http.Error(w, "notification bus not configured", http.StatusServiceUnavailable)
 		return
@@ -3177,17 +3026,13 @@ func parseUIDHex(w http.ResponseWriter, field, hex string) (zkidentity.ShortID, 
 	return uid, true
 }
 
-// decodeUIDOnlyBody enforces POST, decodes a {uid: "<hex>"} JSON body, and
-// parses the uid into a zkidentity.ShortID. Shared by per-user action
-// endpoints that take only a uid argument (KX reset, handshake, future
-// suggest-KX and transitive reset). On any failure it writes the response
-// status and returns ok=false; callers should return immediately.
+// decodeUIDOnlyBody decodes a {uid: "<hex>"} JSON body and parses the uid
+// into a zkidentity.ShortID. Shared by per-user action endpoints that take
+// only a uid argument (KX reset, handshake, future suggest-KX and
+// transitive reset). On any failure it writes the response status and
+// returns ok=false; callers should return immediately.
 func (s *StatusServer) decodeUIDOnlyBody(w http.ResponseWriter, r *http.Request) (zkidentity.ShortID, bool) {
 	var zero zkidentity.ShortID
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return zero, false
-	}
 	var req struct {
 		UID string `json:"uid"`
 	}
@@ -3209,10 +3054,6 @@ func (s *StatusServer) decodeUIDOnlyBody(w http.ResponseWriter, r *http.Request)
 // and BR's clientrpc ChatService.AcceptInvite RPC, which only accepts the
 // binary OOB invite blob.
 func (s *StatusServer) handleRedeemPaidInvite(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	c := s.currentClient()
 	if c == nil {
 		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
@@ -3256,10 +3097,6 @@ func (s *StatusServer) handleRedeemPaidInvite(w http.ResponseWriter, r *http.Req
 // for the lifetime of the transfer (chunks are read on demand), so we keep
 // the file in place rather than auto-deleting after the call returns.
 func (s *StatusServer) handleSendFile(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	c := s.currentClient()
 	if c == nil {
 		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
@@ -3492,10 +3329,6 @@ type topContactOut struct {
 // figures are derived from data the BR client already has in memory, so it
 // stays cheap to refresh on a 30s tick.
 func (s *StatusServer) handleStatsOverview(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	c := s.currentClient()
 	if c == nil {
 		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
@@ -3634,10 +3467,6 @@ func (s *StatusServer) handleClearPayStats(w http.ResponseWriter, r *http.Reques
 // data but only fetches breakdowns on row click; here we ship both in one
 // shot so the dashboard can render the drawer instantly.
 func (s *StatusServer) handleStatsPayments(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	c := s.currentClient()
 	if c == nil {
 		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
@@ -3684,10 +3513,6 @@ func (s *StatusServer) handleStatsPayments(w http.ResponseWriter, r *http.Reques
 // message size), connection start time, and the RMQ RTT quantile histogram.
 // All of this is hidden in bruig.
 func (s *StatusServer) handleStatsNetwork(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	c := s.currentClient()
 	if c == nil {
 		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
@@ -3731,10 +3556,6 @@ func (s *StatusServer) handleStatsNetwork(w http.ResponseWriter, r *http.Request
 // in-memory RemoteUser) we still emit the addressbook row with a zero
 // ratchet block so the UI can show "offline" rather than dropping them.
 func (s *StatusServer) handleStatsContacts(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	c := s.currentClient()
 	if c == nil {
 		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
@@ -3798,10 +3619,6 @@ func (s *StatusServer) handleStatsContacts(w http.ResponseWriter, r *http.Reques
 // aggregates (hearts, comments) derived from ListPostStatusUpdates, plus
 // counts of inbound subscribers and outbound subscriptions.
 func (s *StatusServer) handleStatsPosts(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	c := s.currentClient()
 	if c == nil {
 		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)

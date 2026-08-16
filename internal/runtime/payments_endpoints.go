@@ -39,10 +39,6 @@ type invoiceStatusResp struct {
 // The HTTP surface (mTLS) is the trust boundary; this endpoint only creates an
 // invoice - it moves no funds and reads no wallet state.
 func (s *StatusServer) handlePaymentsInvoice(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	pc := s.currentLNPay()
 	if pc == nil {
 		http.Error(w, "lightning not available", http.StatusServiceUnavailable)
@@ -82,10 +78,6 @@ func (s *StatusServer) handlePaymentsInvoice(w http.ResponseWriter, r *http.Requ
 // handlePaymentsInvoiceWait long-polls until the invoice settles, expires, or
 // is canceled (or the caller disconnects). Wraps DcrlnPaymentClient.TrackInvoice.
 func (s *StatusServer) handlePaymentsInvoiceWait(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	pc := s.currentLNPay()
 	if pc == nil {
 		http.Error(w, "lightning not available", http.StatusServiceUnavailable)
@@ -110,10 +102,6 @@ func (s *StatusServer) handlePaymentsInvoiceWait(w http.ResponseWriter, r *http.
 
 // handlePaymentsInvoiceStatus is a one-shot settlement poll (IsInvoicePaid).
 func (s *StatusServer) handlePaymentsInvoiceStatus(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	pc := s.currentLNPay()
 	if pc == nil {
 		http.Error(w, "lightning not available", http.StatusServiceUnavailable)

@@ -42,10 +42,6 @@ var brClientLibVersion = sync.OnceValue(func() string {
 // handleVersion reports the daemon name/version triple, replicating clientrpc
 // VersionService.Version, plus the BR client library version in use.
 func (s *StatusServer) handleVersion(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	resp := struct {
 		AppName         string `json:"appName"`
 		AppVersion      string `json:"appVersion"`
@@ -65,10 +61,6 @@ func (s *StatusServer) handleVersion(w http.ResponseWriter, r *http.Request) {
 // clientrpc ChatService.UserPublicIdentity. Identity and sig key are emitted
 // base64-encoded to match the clientrpc wire shape consumers already parse.
 func (s *StatusServer) handlePublicIdentity(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	c := s.currentClient()
 	if c == nil {
 		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
@@ -101,10 +93,6 @@ func (s *StatusServer) handlePublicIdentity(w http.ResponseWriter, r *http.Reque
 // empty string clears it. BR caps avatars at 200KiB and broadcasts the change
 // to all contacts (RMProfileUpdate).
 func (s *StatusServer) handleSetAvatar(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	c := s.currentClient()
 	if c == nil {
 		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
@@ -137,10 +125,6 @@ func (s *StatusServer) handleSetAvatar(w http.ResponseWriter, r *http.Request) {
 // ChatService.PM. user may be a nick, alias, or hex peer UID (UserByNick
 // resolves all three).
 func (s *StatusServer) handleSendMessage(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	c := s.currentClient()
 	if c == nil {
 		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
@@ -175,10 +159,6 @@ func (s *StatusServer) handleSendMessage(w http.ResponseWriter, r *http.Request)
 // ChatService.WriteNewInvite. Returns both the raw invite blob (base64) and
 // the bech32 brpik1 key; sharing either KXs a peer to this node.
 func (s *StatusServer) handleCreateInvite(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	c := s.currentClient()
 	if c == nil {
 		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
@@ -209,10 +189,6 @@ func (s *StatusServer) handleCreateInvite(w http.ResponseWriter, r *http.Request
 // handleAcceptInvite reads and accepts a previously-shared OOB invite blob,
 // replicating clientrpc ChatService.AcceptInvite. inviteBytes is base64.
 func (s *StatusServer) handleAcceptInvite(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	c := s.currentClient()
 	if c == nil {
 		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
@@ -246,10 +222,6 @@ func (s *StatusServer) handleAcceptInvite(w http.ResponseWriter, r *http.Request
 // PaymentsService.TipUser. The terminal outcome is surfaced via the
 // notifications stream; this returns once the attempt is queued.
 func (s *StatusServer) handleTip(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	c := s.currentClient()
 	if c == nil {
 		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)

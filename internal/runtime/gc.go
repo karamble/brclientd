@@ -22,105 +22,17 @@ import (
 	"github.com/karamble/brclientd/internal/gaming"
 )
 
-// Routes (registered from status_server.go Run()):
-//   GET    /gc
-//   POST   /gc/create
-//   GET    /gc/invites
-//   POST   /gc/invites/accept
-//   GET    /gc/{gcid}
-//   POST   /gc/{gcid}/invite
-//   POST   /gc/{gcid}/message
-//   GET    /gc/{gcid}/history
-//   POST   /gc/{gcid}/history/clear
-//   POST   /gc/{gcid}/part
-//   POST   /gc/{gcid}/kill
-//   POST   /gc/{gcid}/kick
-//   POST   /gc/{gcid}/block
-//   POST   /gc/{gcid}/unblock
-//   POST   /gc/{gcid}/admins
-//   POST   /gc/{gcid}/owner
-//   POST   /gc/{gcid}/upgrade
-//   POST   /gc/{gcid}/alias
-//   POST   /gc/{gcid}/resend-list
-
-// handleGC dispatches the /gc surface. Mirrors rtdt.go's pattern: net/http
-// ServeMux has no path-param syntax so we hang a single dispatcher off both
-// /gc and /gc/, then parse the rest manually.
-func (s *StatusServer) handleGC(w http.ResponseWriter, r *http.Request) {
-	path := strings.TrimPrefix(r.URL.Path, "/gc")
-	switch {
-	case path == "" || path == "/":
-		s.handleGCList(w, r)
-	case path == "/create":
-		s.handleGCCreate(w, r)
-	case path == "/invites":
-		s.handleGCInvitesList(w, r)
-	case path == "/invites/accept":
-		s.handleGCInvitesAccept(w, r)
-	default:
-		rest := strings.TrimPrefix(path, "/")
-		parts := strings.SplitN(rest, "/", 2)
-		if len(parts) < 1 || parts[0] == "" {
-			http.NotFound(w, r)
-			return
-		}
+// gcidHandler binds {gcid}. PathValue is already decoded, so FromString's
+// 64-hex check is what rejects a value carrying a slash.
+func (s *StatusServer) gcidHandler(h func(http.ResponseWriter, *http.Request, zkidentity.ShortID)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
 		var gcid zkidentity.ShortID
-		if err := gcid.FromString(parts[0]); err != nil {
+		if err := gcid.FromString(r.PathValue("gcid")); err != nil {
 			http.Error(w, "invalid gcid: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		action := ""
-		if len(parts) == 2 {
-			action = parts[1]
-		}
-		switch action {
-		case "":
-			s.handleGCDetail(w, r, gcid)
-		case "invite":
-			s.handleGCInvite(w, r, gcid)
-		case "message":
-			s.handleGCMessage(w, r, gcid)
-		case "history":
-			s.handleGCHistory(w, r, gcid)
-		case "history/clear":
-			s.handleGCClearHistory(w, r, gcid)
-		case "part":
-			s.handleGCPart(w, r, gcid)
-		case "kill":
-			s.handleGCKill(w, r, gcid)
-		case "kick":
-			s.handleGCKick(w, r, gcid)
-		case "block":
-			s.handleGCBlock(w, r, gcid)
-		case "unblock":
-			s.handleGCUnblock(w, r, gcid)
-		case "admins":
-			s.handleGCAdmins(w, r, gcid)
-		case "owner":
-			s.handleGCOwner(w, r, gcid)
-		case "upgrade":
-			s.handleGCUpgrade(w, r, gcid)
-		case "alias":
-			s.handleGCAlias(w, r, gcid)
-		case "resend-list":
-			s.handleGCResendList(w, r, gcid)
-		default:
-			http.NotFound(w, r)
-		}
+		h(w, r, gcid)
 	}
-}
-
-func (s *StatusServer) requireGCClient(w http.ResponseWriter, r *http.Request, method string) *client.Client {
-	if r.Method != method {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return nil
-	}
-	c := s.currentClient()
-	if c == nil {
-		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
-		return nil
-	}
-	return c
 }
 
 // gcSummary is the wire shape returned by /gc and /gc/{gcid}. Keep it
@@ -191,7 +103,7 @@ func summarizeGC(c *client.Client, dbGC *clientdb.GroupChat, includeBlocklist bo
 }
 
 func (s *StatusServer) handleGCList(w http.ResponseWriter, r *http.Request) {
-	c := s.requireGCClient(w, r, http.MethodGet)
+	c := s.requireClient(w)
 	if c == nil {
 		return
 	}
@@ -211,7 +123,7 @@ func (s *StatusServer) handleGCList(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *StatusServer) handleGCCreate(w http.ResponseWriter, r *http.Request) {
-	c := s.requireGCClient(w, r, http.MethodPost)
+	c := s.requireClient(w)
 	if c == nil {
 		return
 	}
@@ -253,7 +165,7 @@ type gcInviteSummary struct {
 }
 
 func (s *StatusServer) handleGCInvitesList(w http.ResponseWriter, r *http.Request) {
-	c := s.requireGCClient(w, r, http.MethodGet)
+	c := s.requireClient(w)
 	if c == nil {
 		return
 	}
@@ -301,7 +213,7 @@ func (s *StatusServer) handleGCInvitesList(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *StatusServer) handleGCInvitesAccept(w http.ResponseWriter, r *http.Request) {
-	c := s.requireGCClient(w, r, http.MethodPost)
+	c := s.requireClient(w)
 	if c == nil {
 		return
 	}
@@ -324,7 +236,7 @@ func (s *StatusServer) handleGCInvitesAccept(w http.ResponseWriter, r *http.Requ
 }
 
 func (s *StatusServer) handleGCDetail(w http.ResponseWriter, r *http.Request, gcid zkidentity.ShortID) {
-	c := s.requireGCClient(w, r, http.MethodGet)
+	c := s.requireClient(w)
 	if c == nil {
 		return
 	}
@@ -338,7 +250,7 @@ func (s *StatusServer) handleGCDetail(w http.ResponseWriter, r *http.Request, gc
 }
 
 func (s *StatusServer) handleGCInvite(w http.ResponseWriter, r *http.Request, gcid zkidentity.ShortID) {
-	c := s.requireGCClient(w, r, http.MethodPost)
+	c := s.requireClient(w)
 	if c == nil {
 		return
 	}
@@ -362,7 +274,7 @@ func (s *StatusServer) handleGCInvite(w http.ResponseWriter, r *http.Request, gc
 }
 
 func (s *StatusServer) handleGCMessage(w http.ResponseWriter, r *http.Request, gcid zkidentity.ShortID) {
-	c := s.requireGCClient(w, r, http.MethodPost)
+	c := s.requireClient(w)
 	if c == nil {
 		return
 	}
@@ -395,10 +307,6 @@ func (s *StatusServer) handleGCMessage(w http.ResponseWriter, r *http.Request, g
 // next message. Irreversible. Pure filesystem, so it works without a live BR
 // client.
 func (s *StatusServer) handleGCClearHistory(w http.ResponseWriter, r *http.Request, gcid zkidentity.ShortID) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	if s.MsgsRoot == "" {
 		http.Error(w, "history paths not configured", http.StatusServiceUnavailable)
 		return
@@ -427,7 +335,7 @@ func (s *StatusServer) handleGCClearHistory(w http.ResponseWriter, r *http.Reque
 }
 
 func (s *StatusServer) handleGCHistory(w http.ResponseWriter, r *http.Request, gcid zkidentity.ShortID) {
-	c := s.requireGCClient(w, r, http.MethodGet)
+	c := s.requireClient(w)
 	if c == nil {
 		return
 	}
@@ -502,7 +410,7 @@ func (s *StatusServer) handleGCHistory(w http.ResponseWriter, r *http.Request, g
 }
 
 func (s *StatusServer) handleGCPart(w http.ResponseWriter, r *http.Request, gcid zkidentity.ShortID) {
-	c := s.requireGCClient(w, r, http.MethodPost)
+	c := s.requireClient(w)
 	if c == nil {
 		return
 	}
@@ -535,7 +443,7 @@ func (s *StatusServer) handleGCPart(w http.ResponseWriter, r *http.Request, gcid
 }
 
 func (s *StatusServer) handleGCKill(w http.ResponseWriter, r *http.Request, gcid zkidentity.ShortID) {
-	c := s.requireGCClient(w, r, http.MethodPost)
+	c := s.requireClient(w)
 	if c == nil {
 		return
 	}
@@ -554,7 +462,7 @@ func (s *StatusServer) handleGCKill(w http.ResponseWriter, r *http.Request, gcid
 }
 
 func (s *StatusServer) handleGCKick(w http.ResponseWriter, r *http.Request, gcid zkidentity.ShortID) {
-	c := s.requireGCClient(w, r, http.MethodPost)
+	c := s.requireClient(w)
 	if c == nil {
 		return
 	}
@@ -579,7 +487,7 @@ func (s *StatusServer) handleGCKick(w http.ResponseWriter, r *http.Request, gcid
 }
 
 func (s *StatusServer) handleGCBlock(w http.ResponseWriter, r *http.Request, gcid zkidentity.ShortID) {
-	c := s.requireGCClient(w, r, http.MethodPost)
+	c := s.requireClient(w)
 	if c == nil {
 		return
 	}
@@ -603,7 +511,7 @@ func (s *StatusServer) handleGCBlock(w http.ResponseWriter, r *http.Request, gci
 }
 
 func (s *StatusServer) handleGCUnblock(w http.ResponseWriter, r *http.Request, gcid zkidentity.ShortID) {
-	c := s.requireGCClient(w, r, http.MethodPost)
+	c := s.requireClient(w)
 	if c == nil {
 		return
 	}
@@ -627,7 +535,7 @@ func (s *StatusServer) handleGCUnblock(w http.ResponseWriter, r *http.Request, g
 }
 
 func (s *StatusServer) handleGCAdmins(w http.ResponseWriter, r *http.Request, gcid zkidentity.ShortID) {
-	c := s.requireGCClient(w, r, http.MethodPost)
+	c := s.requireClient(w)
 	if c == nil {
 		return
 	}
@@ -656,7 +564,7 @@ func (s *StatusServer) handleGCAdmins(w http.ResponseWriter, r *http.Request, gc
 }
 
 func (s *StatusServer) handleGCOwner(w http.ResponseWriter, r *http.Request, gcid zkidentity.ShortID) {
-	c := s.requireGCClient(w, r, http.MethodPost)
+	c := s.requireClient(w)
 	if c == nil {
 		return
 	}
@@ -681,7 +589,7 @@ func (s *StatusServer) handleGCOwner(w http.ResponseWriter, r *http.Request, gci
 }
 
 func (s *StatusServer) handleGCUpgrade(w http.ResponseWriter, r *http.Request, gcid zkidentity.ShortID) {
-	c := s.requireGCClient(w, r, http.MethodPost)
+	c := s.requireClient(w)
 	if c == nil {
 		return
 	}
@@ -700,7 +608,7 @@ func (s *StatusServer) handleGCUpgrade(w http.ResponseWriter, r *http.Request, g
 }
 
 func (s *StatusServer) handleGCAlias(w http.ResponseWriter, r *http.Request, gcid zkidentity.ShortID) {
-	c := s.requireGCClient(w, r, http.MethodPost)
+	c := s.requireClient(w)
 	if c == nil {
 		return
 	}
@@ -719,7 +627,7 @@ func (s *StatusServer) handleGCAlias(w http.ResponseWriter, r *http.Request, gci
 }
 
 func (s *StatusServer) handleGCResendList(w http.ResponseWriter, r *http.Request, gcid zkidentity.ShortID) {
-	c := s.requireGCClient(w, r, http.MethodPost)
+	c := s.requireClient(w)
 	if c == nil {
 		return
 	}

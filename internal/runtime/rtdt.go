@@ -18,75 +18,15 @@ import (
 	"github.com/companyzero/bisonrelay/zkidentity"
 )
 
-// Routes (registered from status_server.go Run()):
-//   GET    /rtdt/sessions
-//   POST   /rtdt/sessions/create
-//   POST   /rtdt/sessions/create-instant
-//   POST   /rtdt/sessions/{rv}/invite
-//   POST   /rtdt/sessions/{rv}/accept
-//   POST   /rtdt/sessions/{rv}/join
-//   POST   /rtdt/sessions/{rv}/leave
-//   POST   /rtdt/sessions/{rv}/dissolve
-//   POST   /rtdt/sessions/{rv}/kick
-//   POST   /rtdt/sessions/{rv}/remove
-//   POST   /rtdt/sessions/{rv}/rotate-cookies
-//
-// All POST endpoints take JSON bodies. The {rv} path parameter is the
-// 64-char hex of the session RV. The /sessions endpoint returns the BR
-// db.RTDTSession objects plus a live flag per session.
-
-// rtdtRouteHandler dispatches /rtdt/sessions* requests. We register a single
-// HandleFunc on "/rtdt/sessions" and one on "/rtdt/sessions/" to cover both
-// the bare list endpoint and the per-session routes, since net/http's
-// ServeMux doesn't pattern-match path params.
-func (s *StatusServer) handleRTDT(w http.ResponseWriter, r *http.Request) {
-	path := strings.TrimPrefix(r.URL.Path, "/rtdt/sessions")
-	switch {
-	case path == "" || path == "/":
-		s.handleRTDTList(w, r)
-	case path == "/create":
-		s.handleRTDTCreate(w, r)
-	case path == "/create-instant":
-		s.handleRTDTCreateInstant(w, r)
-	default:
-		// /<rv>/<action>
-		rest := strings.TrimPrefix(path, "/")
-		parts := strings.SplitN(rest, "/", 2)
-		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-			http.NotFound(w, r)
-			return
-		}
+// rvHandler binds {rv}; same contract as gcidHandler.
+func (s *StatusServer) rvHandler(h func(http.ResponseWriter, *http.Request, zkidentity.ShortID)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
 		var rv zkidentity.ShortID
-		if err := rv.FromString(parts[0]); err != nil {
+		if err := rv.FromString(r.PathValue("rv")); err != nil {
 			http.Error(w, "invalid session RV: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		switch parts[1] {
-		case "invite":
-			s.handleRTDTInvite(w, r, rv)
-		case "accept":
-			s.handleRTDTAccept(w, r, rv)
-		case "join":
-			s.handleRTDTJoin(w, r, rv)
-		case "leave":
-			s.handleRTDTLeave(w, r, rv)
-		case "dissolve":
-			s.handleRTDTDissolve(w, r, rv)
-		case "kick":
-			s.handleRTDTKick(w, r, rv)
-		case "remove":
-			s.handleRTDTRemove(w, r, rv)
-		case "rotate-cookies":
-			s.handleRTDTRotateCookies(w, r, rv)
-		case "audio":
-			s.handleRTDTAudioWS(w, r, rv)
-		case "messages":
-			s.handleRTDTMessages(w, r, rv)
-		case "chat":
-			s.handleRTDTChat(w, r, rv)
-		default:
-			http.NotFound(w, r)
-		}
+		h(w, r, rv)
 	}
 }
 
@@ -94,7 +34,7 @@ func (s *StatusServer) handleRTDT(w http.ResponseWriter, r *http.Request) {
 // (TrackRTDTChatMessages is enabled in the client config; the buffer lives
 // only for the session's lifetime).
 func (s *StatusServer) handleRTDTMessages(w http.ResponseWriter, r *http.Request, rv zkidentity.ShortID) {
-	c := s.requireRTDTClient(w, r, http.MethodGet)
+	c := s.requireClient(w)
 	if c == nil {
 		return
 	}
@@ -120,7 +60,7 @@ func (s *StatusServer) handleRTDTMessages(w http.ResponseWriter, r *http.Request
 
 // handleRTDTChat sends a text message into a live session. Body: {message}.
 func (s *StatusServer) handleRTDTChat(w http.ResponseWriter, r *http.Request, rv zkidentity.ShortID) {
-	c := s.requireRTDTClient(w, r, http.MethodPost)
+	c := s.requireClient(w)
 	if c == nil {
 		return
 	}
@@ -141,20 +81,6 @@ func (s *StatusServer) handleRTDTChat(w http.ResponseWriter, r *http.Request, rv
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
-}
-
-// requireRTDTClient is the standard "BR client up?" guard plus method check.
-func (s *StatusServer) requireRTDTClient(w http.ResponseWriter, r *http.Request, method string) *client.Client {
-	if r.Method != method {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return nil
-	}
-	c := s.currentClient()
-	if c == nil {
-		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
-		return nil
-	}
-	return c
 }
 
 // sessionSummary is the wire shape returned by /rtdt/sessions. It carries
@@ -238,7 +164,7 @@ func summarizeSession(c *client.Client, sess *clientdb.RTDTSession) rtdtSessionS
 }
 
 func (s *StatusServer) handleRTDTList(w http.ResponseWriter, r *http.Request) {
-	c := s.requireRTDTClient(w, r, http.MethodGet)
+	c := s.requireClient(w)
 	if c == nil {
 		return
 	}
@@ -259,7 +185,7 @@ func (s *StatusServer) handleRTDTList(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *StatusServer) handleRTDTCreate(w http.ResponseWriter, r *http.Request) {
-	c := s.requireRTDTClient(w, r, http.MethodPost)
+	c := s.requireClient(w)
 	if c == nil {
 		return
 	}
@@ -285,7 +211,7 @@ func (s *StatusServer) handleRTDTCreate(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *StatusServer) handleRTDTCreateInstant(w http.ResponseWriter, r *http.Request) {
-	c := s.requireRTDTClient(w, r, http.MethodPost)
+	c := s.requireClient(w)
 	if c == nil {
 		return
 	}
@@ -319,7 +245,7 @@ func (s *StatusServer) handleRTDTCreateInstant(w http.ResponseWriter, r *http.Re
 }
 
 func (s *StatusServer) handleRTDTInvite(w http.ResponseWriter, r *http.Request, rv zkidentity.ShortID) {
-	c := s.requireRTDTClient(w, r, http.MethodPost)
+	c := s.requireClient(w)
 	if c == nil {
 		return
 	}
@@ -352,7 +278,7 @@ func (s *StatusServer) handleRTDTInvite(w http.ResponseWriter, r *http.Request, 
 }
 
 func (s *StatusServer) handleRTDTAccept(w http.ResponseWriter, r *http.Request, rv zkidentity.ShortID) {
-	c := s.requireRTDTClient(w, r, http.MethodPost)
+	c := s.requireClient(w)
 	if c == nil {
 		return
 	}
@@ -377,7 +303,7 @@ func (s *StatusServer) handleRTDTAccept(w http.ResponseWriter, r *http.Request, 
 }
 
 func (s *StatusServer) handleRTDTJoin(w http.ResponseWriter, r *http.Request, rv zkidentity.ShortID) {
-	c := s.requireRTDTClient(w, r, http.MethodPost)
+	c := s.requireClient(w)
 	if c == nil {
 		return
 	}
@@ -401,7 +327,7 @@ func (s *StatusServer) handleRTDTJoin(w http.ResponseWriter, r *http.Request, rv
 }
 
 func (s *StatusServer) handleRTDTLeave(w http.ResponseWriter, r *http.Request, rv zkidentity.ShortID) {
-	c := s.requireRTDTClient(w, r, http.MethodPost)
+	c := s.requireClient(w)
 	if c == nil {
 		return
 	}
@@ -413,7 +339,7 @@ func (s *StatusServer) handleRTDTLeave(w http.ResponseWriter, r *http.Request, r
 }
 
 func (s *StatusServer) handleRTDTDissolve(w http.ResponseWriter, r *http.Request, rv zkidentity.ShortID) {
-	c := s.requireRTDTClient(w, r, http.MethodPost)
+	c := s.requireClient(w)
 	if c == nil {
 		return
 	}
@@ -425,7 +351,7 @@ func (s *StatusServer) handleRTDTDissolve(w http.ResponseWriter, r *http.Request
 }
 
 func (s *StatusServer) handleRTDTKick(w http.ResponseWriter, r *http.Request, rv zkidentity.ShortID) {
-	c := s.requireRTDTClient(w, r, http.MethodPost)
+	c := s.requireClient(w)
 	if c == nil {
 		return
 	}
@@ -446,7 +372,7 @@ func (s *StatusServer) handleRTDTKick(w http.ResponseWriter, r *http.Request, rv
 }
 
 func (s *StatusServer) handleRTDTRemove(w http.ResponseWriter, r *http.Request, rv zkidentity.ShortID) {
-	c := s.requireRTDTClient(w, r, http.MethodPost)
+	c := s.requireClient(w)
 	if c == nil {
 		return
 	}
@@ -471,7 +397,7 @@ func (s *StatusServer) handleRTDTRemove(w http.ResponseWriter, r *http.Request, 
 }
 
 func (s *StatusServer) handleRTDTRotateCookies(w http.ResponseWriter, r *http.Request, rv zkidentity.ShortID) {
-	c := s.requireRTDTClient(w, r, http.MethodPost)
+	c := s.requireClient(w)
 	if c == nil {
 		return
 	}

@@ -29,10 +29,6 @@ import (
 // since drops frames older than the given unix timestamp first. local_nick
 // lets the caller tell its own frames apart from the peer's.
 func (s *StatusServer) handleMsigHistory(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	if s.DB == nil {
 		http.Error(w, "history unavailable: clientdb not attached", http.StatusServiceUnavailable)
 		return

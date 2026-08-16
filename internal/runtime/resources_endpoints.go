@@ -18,10 +18,6 @@ import (
 // second dock while one is held gets 409. mTLS (RequireAndVerifyClientCert) is
 // the authorization gate.
 func (s *StatusServer) handleResourceRequests(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	ctrl := s.currentStoreController()
 	if ctrl == nil {
 		http.Error(w, "store controller not configured", http.StatusServiceUnavailable)
@@ -76,10 +72,6 @@ func (s *StatusServer) handleResourceRequests(w http.ResponseWriter, r *http.Req
 // handleResourceFulfill receives a docked service's reply to a forwarded fetch
 // and routes it to the waiting request.
 func (s *StatusServer) handleResourceFulfill(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	ctrl := s.currentStoreController()
 	if ctrl == nil {
 		http.Error(w, "store controller not configured", http.StatusServiceUnavailable)

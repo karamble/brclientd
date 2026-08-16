@@ -76,10 +76,6 @@ func (s *StatusServer) handleMCPPending(w http.ResponseWriter, r *http.Request) 
 	if b == nil {
 		return
 	}
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	mcpWriteJSON(w, struct {
 		Pending []bridge.PendingPayment `json:"pending"`
 	}{Pending: b.PendingPayments()})
@@ -89,10 +85,6 @@ func (s *StatusServer) handleMCPPending(w http.ResponseWriter, r *http.Request) 
 func (s *StatusServer) handleMCPPendingResolve(w http.ResponseWriter, r *http.Request) {
 	b := s.mcpBridgeOr503(w)
 	if b == nil {
-		return
-	}
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	var req struct {
@@ -119,10 +111,6 @@ func (s *StatusServer) handleMCPPendingResolve(w http.ResponseWriter, r *http.Re
 func (s *StatusServer) handleMCPSpend(w http.ResponseWriter, r *http.Request) {
 	b := s.mcpBridgeOr503(w)
 	if b == nil {
-		return
-	}
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	entries, today := b.SpendLog()
