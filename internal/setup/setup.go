@@ -133,17 +133,13 @@ func (s *Server) Run(ctx context.Context) error {
 // the real route table without a TLS listener.
 func (s *Server) routes(done, restored chan<- struct{}) *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/create-identity", s.handleCreate(done))
-	mux.HandleFunc("/restore-backup", s.handleRestore(restored))
+	mux.HandleFunc("POST /create-identity", s.handleCreate(done))
+	mux.HandleFunc("POST /restore-backup", s.handleRestore(restored))
 	return mux
 }
 
 func (s *Server) handleCreate(done chan<- struct{}) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
 		body, err := io.ReadAll(io.LimitReader(r.Body, 16*1024))
 		if err != nil {
 			http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
@@ -187,10 +183,6 @@ func (s *Server) handleCreate(done chan<- struct{}) http.HandlerFunc {
 // safe; the daemon restarts instead.
 func (s *Server) handleRestore(restored chan<- struct{}) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
 		if s.AppDataDir == "" {
 			http.Error(w, "app data dir not configured", http.StatusInternalServerError)
 			return

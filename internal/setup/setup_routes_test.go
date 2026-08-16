@@ -24,8 +24,8 @@ func TestSetupRoutePatterns(t *testing.T) {
 	rows := []struct {
 		method, path, want string
 	}{
-		{http.MethodPost, "/create-identity", "/create-identity"},
-		{http.MethodPost, "/restore-backup", "/restore-backup"},
+		{http.MethodPost, "/create-identity", "POST /create-identity"},
+		{http.MethodPost, "/restore-backup", "POST /restore-backup"},
 	}
 	mux := setupMux()
 	for _, row := range rows {
@@ -38,7 +38,7 @@ func TestSetupRoutePatterns(t *testing.T) {
 }
 
 // TestSetupMethodContract: POST reaches both handlers; PUT and DELETE answer
-// 405; GET /create-identity answers 405 with no Allow header.
+// 405; GET /create-identity answers 405 with Allow: POST.
 func TestSetupMethodContract(t *testing.T) {
 	mux := setupMux()
 	probe := func(method, path string) *httptest.ResponseRecorder {
@@ -63,7 +63,7 @@ func TestSetupMethodContract(t *testing.T) {
 	if rr.Code != http.StatusMethodNotAllowed {
 		t.Errorf("GET /create-identity: status = %d, want 405", rr.Code)
 	}
-	if allow := rr.Result().Header.Get("Allow"); allow != "" {
-		t.Errorf("GET /create-identity: Allow = %q, want empty", allow)
+	if allow := rr.Result().Header.Get("Allow"); allow != "POST" {
+		t.Errorf("GET /create-identity: Allow = %q, want %q", allow, "POST")
 	}
 }
