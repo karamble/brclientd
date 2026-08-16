@@ -151,8 +151,8 @@ A `{gcid}` value is the group chat's 64-character hex ID.
 | `POST /gc/{gcid}/unblock` | unblock a member |
 | `POST /gc/{gcid}/admins` | modify the extra admins list |
 | `POST /gc/{gcid}/owner` | transfer group chat ownership |
-| `POST /gc/{gcid}/upgrade` | upgrade the group chat version |
-| `POST /gc/{gcid}/alias` | set a local alias for the group chat |
+| `POST /gc/{gcid}/upgrade` | upgrade the group chat version; `new_version` is required |
+| `POST /gc/{gcid}/alias` | set a local alias for the group chat; `alias` is required |
 | `POST /gc/{gcid}/resend-list` | resend the member list to one member or all |
 
 ### Posts
@@ -202,9 +202,9 @@ config file).
 
 | Route | Purpose |
 | ----- | ------- |
-| `GET /store/mode`, `POST /store/mode` | switch resource hosting between pages and the store |
+| `GET /store/mode`, `POST /store/mode` | switch resource hosting between pages and the store; `mode` must be `off`, `pages` or `store` |
 | `GET /store/products`, `POST /store/products` | list and save products |
-| `POST /store/products/delete` | delete a product |
+| `POST /store/products/delete` | delete a product; `sku` is required |
 | `GET /store/orders` | list orders |
 | `POST /store/orders/status` | update an order's status |
 | `POST /store/orders/comment` | send a comment on an order to the buyer |

@@ -595,15 +595,19 @@ func (s *StatusServer) handleGCOwner(w http.ResponseWriter, r *http.Request, gci
 }
 
 func (s *StatusServer) handleGCUpgrade(w http.ResponseWriter, r *http.Request, gcid zkidentity.ShortID) {
-	c := s.requireClient(w)
-	if c == nil {
-		return
-	}
 	var req struct {
 		NewVersion uint8 `json:"new_version"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.NewVersion == 0 {
+		http.Error(w, "new_version is required", http.StatusBadRequest)
+		return
+	}
+	c := s.requireClient(w)
+	if c == nil {
 		return
 	}
 	if err := c.UpgradeGC(gcid, req.NewVersion); err != nil {
@@ -614,15 +618,19 @@ func (s *StatusServer) handleGCUpgrade(w http.ResponseWriter, r *http.Request, g
 }
 
 func (s *StatusServer) handleGCAlias(w http.ResponseWriter, r *http.Request, gcid zkidentity.ShortID) {
-	c := s.requireClient(w)
-	if c == nil {
-		return
-	}
 	var req struct {
 		Alias string `json:"alias"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.Alias) == "" {
+		http.Error(w, "alias is required", http.StatusBadRequest)
+		return
+	}
+	c := s.requireClient(w)
+	if c == nil {
 		return
 	}
 	if err := c.AliasGC(gcid, req.Alias); err != nil {

@@ -1937,13 +1937,13 @@ var rateState struct {
 // away from the store stops its invoice watcher, so orders awaiting payment will
 // not auto-settle until it is re-enabled.
 func (s *StatusServer) handleStoreMode(w http.ResponseWriter, r *http.Request) {
-	ctrl := s.currentStoreController()
-	if ctrl == nil {
-		http.Error(w, "store controller not yet ready", http.StatusServiceUnavailable)
-		return
-	}
 	switch r.Method {
 	case http.MethodGet:
+		ctrl := s.currentStoreController()
+		if ctrl == nil {
+			http.Error(w, "store controller not yet ready", http.StatusServiceUnavailable)
+			return
+		}
 		writeStoreMode(w, ctrl.Mode())
 	case http.MethodPost:
 		var req storeMode
@@ -1954,10 +1954,16 @@ func (s *StatusServer) handleStoreMode(w http.ResponseWriter, r *http.Request) {
 		switch req.Mode {
 		case hostModeOff, hostModePages, hostModeStore:
 		default:
-			req.Mode = hostModeOff
+			http.Error(w, "unknown mode", http.StatusBadRequest)
+			return
 		}
 		if req.Mode == hostModeStore && req.PayType != "ln" && req.PayType != "onchain" {
 			req.PayType = "ln"
+		}
+		ctrl := s.currentStoreController()
+		if ctrl == nil {
+			http.Error(w, "store controller not yet ready", http.StatusServiceUnavailable)
+			return
 		}
 		if err := ctrl.SetMode(req); err != nil {
 			http.Error(w, "set store mode: "+err.Error(), http.StatusBadGateway)
@@ -2019,16 +2025,20 @@ func (s *StatusServer) handleStoreProducts(w http.ResponseWriter, r *http.Reques
 
 // handleStoreProductDelete removes a product by SKU. Body: {sku}.
 func (s *StatusServer) handleStoreProductDelete(w http.ResponseWriter, r *http.Request) {
-	ctrl := s.currentStoreController()
-	if ctrl == nil {
-		http.Error(w, "store controller not yet ready", http.StatusServiceUnavailable)
-		return
-	}
 	var req struct {
 		SKU string `json:"sku"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.SKU == "" {
+		http.Error(w, "sku is required", http.StatusBadRequest)
+		return
+	}
+	ctrl := s.currentStoreController()
+	if ctrl == nil {
+		http.Error(w, "store controller not yet ready", http.StatusServiceUnavailable)
 		return
 	}
 	if err := ctrl.deleteProduct(req.SKU); err != nil {

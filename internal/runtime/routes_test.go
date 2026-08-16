@@ -360,6 +360,13 @@ func TestRouteBehavior(t *testing.T) {
 		{"/contacts/reset-all", `{"age_days":`, http.StatusBadRequest, "decode body:"},
 		{"/contacts/reset-all", `{"age_days":0}`, http.StatusServiceUnavailable, "BR client not yet running"},
 		{"/contacts/reset-all", `{"age_days":-1}`, http.StatusBadRequest, "age_days must not be negative"},
+		{"/store/mode", `{"mode":"junk"}`, http.StatusBadRequest, "unknown mode"},
+		{"/store/mode", `{}`, http.StatusBadRequest, "unknown mode"},
+		{"/store/mode", `{"mode":"off"}`, http.StatusServiceUnavailable, "store controller not yet ready"},
+		{"/store/products/delete", `{}`, http.StatusBadRequest, "sku is required"},
+		{"/gc/" + probeID + "/upgrade", `{}`, http.StatusBadRequest, "new_version is required"},
+		{"/gc/" + probeID + "/alias", `{"alias":" "}`, http.StatusBadRequest, "alias is required"},
+		{"/gc/" + probeID + "/alias", `{"alias":"pals"}`, http.StatusServiceUnavailable, "BR client not yet running"},
 	}
 	for _, row := range bodyRows {
 		t.Run("POST "+row.target+" body "+row.body, func(t *testing.T) {
