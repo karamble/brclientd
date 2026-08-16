@@ -172,13 +172,9 @@ func (s *StatusServer) requestRestart() {
 	s.restartOnce.Do(func() { close(s.RestartCh) })
 }
 
-// Run blocks until ctx is cancelled or the server fails.
-func (s *StatusServer) Run(ctx context.Context) error {
-	tlsCfg, err := s.Certs.LoadServerTLSConfig()
-	if err != nil {
-		return fmt.Errorf("status: load tls config: %w", err)
-	}
-
+// routes builds the status API mux. Kept separate from Run so tests can
+// exercise the real route table without a TLS listener.
+func (s *StatusServer) routes() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/status", s.handleStatus)
 	mux.HandleFunc("/history/pm", s.handleHistoryPM)
@@ -287,6 +283,17 @@ func (s *StatusServer) Run(ctx context.Context) error {
 	mux.HandleFunc("/kx/list", s.handleKXList)
 	mux.HandleFunc("/kx/searches", s.handleKXSearches)
 	mux.HandleFunc("/kx/mediateids", s.handleMediateIDs)
+	return mux
+}
+
+// Run blocks until ctx is cancelled or the server fails.
+func (s *StatusServer) Run(ctx context.Context) error {
+	tlsCfg, err := s.Certs.LoadServerTLSConfig()
+	if err != nil {
+		return fmt.Errorf("status: load tls config: %w", err)
+	}
+
+	mux := s.routes()
 
 	srv := &http.Server{
 		Addr:              s.Listen,

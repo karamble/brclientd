@@ -90,9 +90,7 @@ func (s *Server) Run(ctx context.Context) error {
 
 	done := make(chan struct{})
 	restored := make(chan struct{})
-	mux := http.NewServeMux()
-	mux.HandleFunc("/create-identity", s.handleCreate(done))
-	mux.HandleFunc("/restore-backup", s.handleRestore(restored))
+	mux := s.routes(done, restored)
 
 	srv := &http.Server{
 		Addr:              s.Listen,
@@ -129,6 +127,15 @@ func (s *Server) Run(ctx context.Context) error {
 		srv.Shutdown(shutdown)
 		return ErrRestorePending
 	}
+}
+
+// routes builds the setup mux. Kept separate from Run so tests can exercise
+// the real route table without a TLS listener.
+func (s *Server) routes(done, restored chan<- struct{}) *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/create-identity", s.handleCreate(done))
+	mux.HandleFunc("/restore-backup", s.handleRestore(restored))
+	return mux
 }
 
 func (s *Server) handleCreate(done chan<- struct{}) http.HandlerFunc {
