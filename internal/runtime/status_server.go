@@ -721,18 +721,20 @@ func (s *StatusServer) handleKXReset(w http.ResponseWriter, r *http.Request) {
 // Mirrors brclient's /rresetold. Initiation only: the resets complete via
 // mailbox ping-pong whenever each peer comes online; no state is tracked.
 func (s *StatusServer) handleKXResetAll(w http.ResponseWriter, r *http.Request) {
-	c := s.currentClient()
-	if c == nil {
-		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
-		return
-	}
 	var req struct {
 		AgeDays int `json:"age_days"`
 	}
-	// An empty body selects the default age.
-	_ = json.NewDecoder(r.Body).Decode(&req)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
 	if req.AgeDays < 0 {
 		http.Error(w, "age_days must not be negative", http.StatusBadRequest)
+		return
+	}
+	c := s.currentClient()
+	if c == nil {
+		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
 		return
 	}
 	interval := time.Duration(req.AgeDays) * 24 * time.Hour

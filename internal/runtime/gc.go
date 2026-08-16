@@ -410,14 +410,17 @@ func (s *StatusServer) handleGCHistory(w http.ResponseWriter, r *http.Request, g
 }
 
 func (s *StatusServer) handleGCPart(w http.ResponseWriter, r *http.Request, gcid zkidentity.ShortID) {
+	var req struct {
+		Reason string `json:"reason"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
 	c := s.requireClient(w)
 	if c == nil {
 		return
 	}
-	var req struct {
-		Reason string `json:"reason"`
-	}
-	_ = json.NewDecoder(r.Body).Decode(&req)
 	if err := c.PartFromGC(gcid, req.Reason); err != nil {
 		// PartFromGC deletes the GC before notifying members and the
 		// notify step errors spuriously when the GC has unKXd members
@@ -443,14 +446,17 @@ func (s *StatusServer) handleGCPart(w http.ResponseWriter, r *http.Request, gcid
 }
 
 func (s *StatusServer) handleGCKill(w http.ResponseWriter, r *http.Request, gcid zkidentity.ShortID) {
+	var req struct {
+		Reason string `json:"reason"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
 	c := s.requireClient(w)
 	if c == nil {
 		return
 	}
-	var req struct {
-		Reason string `json:"reason"`
-	}
-	_ = json.NewDecoder(r.Body).Decode(&req)
 	if err := c.KillGroupChat(gcid, req.Reason); err != nil {
 		http.Error(w, "kill: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -627,14 +633,17 @@ func (s *StatusServer) handleGCAlias(w http.ResponseWriter, r *http.Request, gci
 }
 
 func (s *StatusServer) handleGCResendList(w http.ResponseWriter, r *http.Request, gcid zkidentity.ShortID) {
+	var req struct {
+		UID string `json:"uid,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
 	c := s.requireClient(w)
 	if c == nil {
 		return
 	}
-	var req struct {
-		UID string `json:"uid,omitempty"`
-	}
-	_ = json.NewDecoder(r.Body).Decode(&req)
 	var uidPtr *clientintf.UserID
 	if req.UID != "" {
 		var uid clientintf.UserID

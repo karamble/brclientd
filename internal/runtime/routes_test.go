@@ -282,7 +282,7 @@ func TestRouteBehavior(t *testing.T) {
 		{http.MethodPost, "/gc/" + probeID + "%2Fkill", http.StatusMethodNotAllowed, "Method Not Allowed", "", true, false, "GET, HEAD"},
 		{http.MethodGet, "/gc/" + probeID + "%2Fkill", http.StatusBadRequest, "invalid gcid:", "", true, false, ""},
 		{http.MethodPost, "/rtdt/sessions/" + probeID + "%2Fdissolve", http.StatusNotFound, "404 page not found", "", true, false, ""},
-		{http.MethodPost, "/gc/" + probeID + "/kill", http.StatusServiceUnavailable, "BR client not yet running", "", false, false, ""},
+		{http.MethodPost, "/gc/" + probeID + "/kill", http.StatusBadRequest, "decode body: EOF", "", false, false, ""},
 		{http.MethodPost, "/rtdt/sessions/" + probeID + "/dissolve", http.StatusServiceUnavailable, "BR client not yet running", "", false, false, ""},
 		{http.MethodPost, "/gc/" + probeID + "/history/clear", http.StatusServiceUnavailable, "history paths not configured", "", false, false, ""},
 		{http.MethodPost, "/gc/" + probeID + "/../../contacts/reset-all", http.StatusBadRequest, "path not canonical", "", false, false, ""},
@@ -340,6 +340,37 @@ func TestRouteBehavior(t *testing.T) {
 				if allow := rr.Result().Header.Get("Allow"); allow != row.allow {
 					t.Errorf("Allow = %q, want %q", allow, row.allow)
 				}
+			}
+		})
+	}
+
+	// Body rows: a request must never act on a body it could not parse, and a
+	// zero value must never silently pick the action.
+	bodyRows := []struct {
+		target, body string
+		status       int
+		bodyPrefix   string
+	}{
+		{"/gc/" + probeID + "/part", `{"reason":`, http.StatusBadRequest, "decode body:"},
+		{"/gc/" + probeID + "/kill", `{"reason":`, http.StatusBadRequest, "decode body:"},
+		{"/gc/" + probeID + "/kill", `{"reason":"done"}`, http.StatusServiceUnavailable, "BR client not yet running"},
+		{"/gc/" + probeID + "/resend-list", `{"uid":`, http.StatusBadRequest, "decode body:"},
+		{"/gc/" + probeID + "/resend-list", `{}`, http.StatusServiceUnavailable, "BR client not yet running"},
+		{"/contacts/reset-all", ``, http.StatusBadRequest, "decode body: EOF"},
+		{"/contacts/reset-all", `{"age_days":`, http.StatusBadRequest, "decode body:"},
+		{"/contacts/reset-all", `{"age_days":0}`, http.StatusServiceUnavailable, "BR client not yet running"},
+		{"/contacts/reset-all", `{"age_days":-1}`, http.StatusBadRequest, "age_days must not be negative"},
+	}
+	for _, row := range bodyRows {
+		t.Run("POST "+row.target+" body "+row.body, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, row.target, strings.NewReader(row.body))
+			rr := httptest.NewRecorder()
+			h.ServeHTTP(rr, req)
+			if rr.Code != row.status {
+				t.Fatalf("status = %d, want %d (body %q)", rr.Code, row.status, rr.Body.String())
+			}
+			if !strings.HasPrefix(strings.TrimSpace(rr.Body.String()), row.bodyPrefix) {
+				t.Errorf("body = %q, want prefix %q", rr.Body.String(), row.bodyPrefix)
 			}
 		})
 	}
