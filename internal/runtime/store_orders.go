@@ -177,6 +177,13 @@ func (s *storeController) cancelIfExpired(order *simplestore.Order, msg string) 
 // simplestore.invoiceSettled. SendFile is synchronous and can block on large
 // files, so each send runs in its own goroutine (as the lib does). The progress
 // channel must be nil (a non-nil channel hangs the send in BR v0.2.4).
+//
+// SendFilename is caller-supplied and the order carries a product snapshot taken
+// at order time, so a name poisoned before this order was placed is still on disk
+// here. Each one is re-gated at delivery by the same validateStoreMediaRel that
+// saveStoreFile applies on the way in, then resolved through an os.Root: without
+// both, an absolute path or a symlink planted in the store dir would make the
+// store ship any file the daemon can read.
 func (s *storeController) sendOrderFiles(o *simplestore.Order) {
 	uid := o.User
 	id := uint64(o.ID)
@@ -184,23 +191,57 @@ func (s *storeController) sendOrderFiles(o *simplestore.Order) {
 		if item == nil || item.Product == nil || item.Product.SendFilename == "" {
 			continue
 		}
-		fname := item.Product.SendFilename
-		if !filepath.IsAbs(fname) {
-			fname = filepath.Join(s.storeDir, fname)
+		rel := item.Product.SendFilename
+		fname, err := s.resolveSendFile(rel)
+		if err != nil {
+			s.logFn("SSTR").Warnf("order %d: refusing to send %q: %v", id, rel, err)
+			if s.notes != nil {
+				s.notes.add("warn", "Store file delivery refused",
+					fmt.Sprintf("Order #%d: %q is not a file inside the store directory: %v",
+						id, rel, err), uid.String())
+			}
+			continue
 		}
-		go func(fname string) {
+		go func(fname, rel string) {
 			if err := s.client.SendFile(uid, 0, fname, nil); err != nil {
-				s.logFn("SSTR").Errorf("order %d: send file %s: %v", id, fname, err)
+				s.logFn("SSTR").Errorf("order %d: send file %s: %v", id, rel, err)
 				if s.notes != nil {
 					s.notes.add("warn", "Store file delivery failed",
 						fmt.Sprintf("Order #%d: could not send %s: %v",
-							id, filepath.Base(fname), err), uid.String())
+							id, rel, err), uid.String())
 				}
 				return
 			}
-			s.logFn("SSTR").Infof("order %d: sent file %s", id, filepath.Base(fname))
-		}(fname)
+			s.logFn("SSTR").Infof("order %d: sent file %s", id, rel)
+		}(fname, rel)
 	}
+}
+
+// resolveSendFile resolves a product's SendFilename to a path inside the store
+// dir, or reports why it is not deliverable. The lexical gate is the same
+// validateStoreMediaRel that saveStoreFile applies on the way in; the os.Root
+// lookup additionally refuses a symlink aimed out of the store dir, which the
+// lexical check alone cannot see. SendFile re-resolves the path rather than
+// taking the handle verified here, so changing it in between would need write
+// access to the store dir.
+func (s *storeController) resolveSendFile(name string) (string, error) {
+	rel, err := s.validateStoreMediaRel(name)
+	if err != nil {
+		return "", err
+	}
+	root, err := os.OpenRoot(s.storeDir)
+	if err != nil {
+		return "", err
+	}
+	defer root.Close()
+	fi, err := root.Lstat(rel)
+	if err != nil {
+		return "", err
+	}
+	if !fi.Mode().IsRegular() {
+		return "", fmt.Errorf("not a regular file")
+	}
+	return filepath.Join(s.storeDir, rel), nil
 }
 
 // addOrderComment appends a merchant comment to an order and DMs the buyer

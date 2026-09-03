@@ -161,6 +161,16 @@ func (s *storeController) saveProduct(p storeProduct, create bool) error {
 	if err := validateProductContent(p); err != nil {
 		return err
 	}
+	// Reject a digital-download path that escapes the store dir at write time, so
+	// the operator hears about it now rather than at delivery. sendOrderFiles
+	// re-checks, because an order snapshots the product it was placed against.
+	if p.SendFilename != "" {
+		rel, err := s.validateStoreMediaRel(p.SendFilename)
+		if err != nil {
+			return fmt.Errorf("sendfilename: %w", err)
+		}
+		p.SendFilename = rel
+	}
 	products, err := s.listProducts()
 	if err != nil {
 		return err
