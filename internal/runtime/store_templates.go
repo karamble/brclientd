@@ -17,30 +17,55 @@ import (
 // templates live directly in the store root (no subdirectories).
 var storeTemplateNameRE = regexp.MustCompile(`^[A-Za-z0-9_.-]+\.tmpl$`)
 
-var (
-	storeEmbedRE      = regexp.MustCompile(`--embed\[([^\]]*)\]--`)
-	storeLocalFnArgRE = regexp.MustCompile(`(?:^|,)\s*localfilename=([^,]*)`)
-)
+// storeEmbedFileRE matches a plain relative path built from the same character
+// set br_page_import_embed can produce, and nothing else.
+var storeEmbedFileRE = regexp.MustCompile(`^([A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+$`)
 
-// templateHasUnsafeEmbed reports whether template content contains an embed
-// whose localfilename escapes the store dir (absolute path or ".."). The store's
+// safeEmbedLocalFile reports whether v is a relative path that filepath.Join
+// cannot take outside the directory it is joined to. It is an allow list: only
+// a plain relative filename passes, so a construct nobody anticipated is denied
+// rather than permitted.
+func safeEmbedLocalFile(v string) bool {
+	if v == "" || len(v) > 255 || !storeEmbedFileRE.MatchString(v) {
+		return false
+	}
+	for _, part := range strings.Split(v, "/") {
+		if part == "." || part == ".." {
+			return false
+		}
+	}
+	return true
+}
+
+// templateHasUnsafeEmbed reports whether template content carries a localfilename
+// that is not a plain relative file inside the store dir. The store's
 // ProcessEmbeds inlines that file's bytes into served pages, so a stored
 // template could otherwise read arbitrary server files (wallet keys, /etc, ...).
 // We block it at write time since ProcessEmbeds itself lives in the pinned BR
-// library.
+// library. The check is a hard filter on the raw text rather than a copy of that
+// library's embed parsing, so a future BR version cannot parse its way past it.
 func templateHasUnsafeEmbed(content string) bool {
-	for _, m := range storeEmbedRE.FindAllStringSubmatch(content, -1) {
-		for _, a := range storeLocalFnArgRE.FindAllStringSubmatch(m[1], -1) {
-			v := strings.TrimSpace(a[1])
-			if v == "" {
-				continue
-			}
-			if filepath.IsAbs(v) || strings.Contains(v, "..") {
-				return true
-			}
+	const key = "localfilename="
+	for i := 0; ; {
+		j := strings.Index(content[i:], key)
+		if j < 0 {
+			return false
+		}
+		i += j + len(key)
+		// The value runs to the next argument or the end of the embed. It may
+		// not stop at a bare "]": ProcessEmbeds cleans "a]/../../x" out of the
+		// root, so truncating there would hide the traversal.
+		v := content[i:]
+		if k := strings.Index(v, ","); k >= 0 {
+			v = v[:k]
+		}
+		if k := strings.Index(v, "]--"); k >= 0 {
+			v = v[:k]
+		}
+		if !safeEmbedLocalFile(strings.TrimSpace(v)) {
+			return true
 		}
 	}
-	return false
 }
 
 func validateTemplateName(name string) (string, bool) {
