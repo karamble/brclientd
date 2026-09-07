@@ -40,8 +40,13 @@ func mcpWriteJSON(w http.ResponseWriter, v any) {
 // mcpSettingsReply is the settings reply plus the listener's most recent
 // allowed-IP denial (in-memory, cleared by the agent's next successful
 // request) so the dashboard can offer the observed address for allowing.
+//
+// Token is set only on the reply to a save that minted one. The bridge keeps
+// just a hash, so this is the single moment the plaintext can be handed on;
+// every other reply leaves it empty and reports TokenSet.
 type mcpSettingsReply struct {
 	bridge.Settings
+	Token      string                `json:"token,omitempty"`
 	LastDenied *bridge.DeniedAttempt `json:"last_denied,omitempty"`
 }
 
@@ -60,11 +65,14 @@ func (s *StatusServer) handleMCPSettings(w http.ResponseWriter, r *http.Request)
 			http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		if err := b.ApplySettings(req); err != nil {
+		minted, err := b.ApplySettings(req)
+		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		mcpWriteJSON(w, mcpSettingsReply{Settings: b.Settings(), LastDenied: b.LastDenied()})
+		mcpWriteJSON(w, mcpSettingsReply{
+			Settings: b.Settings(), Token: minted, LastDenied: b.LastDenied(),
+		})
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
