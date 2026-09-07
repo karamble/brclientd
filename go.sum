@@ -419,6 +419,8 @@ github.com/karamble/brmcp v0.1.1-0.20260804104404-333adf7bfe50 h1:kl0li6NsjeIBWY
 github.com/karamble/brmcp v0.1.1-0.20260804104404-333adf7bfe50/go.mod h1:GLGNKfOgkmE7o6r9TSM4DDfOfom5KBNQpAj05jMP6zQ=
 github.com/karamble/brmcp v0.1.1-0.20260907131733-78fea1d8cec0 h1:+2Gf3mzvTg5DIRJyFkQlkIfGBxWdZSNHiygyA3U1mZA=
 github.com/karamble/brmcp v0.1.1-0.20260907131733-78fea1d8cec0/go.mod h1:GLGNKfOgkmE7o6r9TSM4DDfOfom5KBNQpAj05jMP6zQ=
+github.com/karamble/brmcp v0.1.1-0.20260907142502-0597b66c3c20 h1:XHwMvfdUAPvAYcce4ezwiWc8uL9v8a+sVuT1tEhbRoQ=
+github.com/karamble/brmcp v0.1.1-0.20260907142502-0597b66c3c20/go.mod h1:GLGNKfOgkmE7o6r9TSM4DDfOfom5KBNQpAj05jMP6zQ=
 github.com/kisielk/errcheck v1.5.0/go.mod h1:pFxgyoBC7bSaBwPgfKdkLd5X25qrDl4LWUI2bnpBCr8=
 github.com/kisielk/gotool v1.0.0/go.mod h1:XhKaO+MFFWcvkIS/tQcRk01m1F5IRFswLeQ+oQHNcck=
 github.com/kkdai/bstream v1.0.0 h1:Se5gHwgp2VT2uHfDrkbbgbgEvV9cimLELwrPJctSjg8=
