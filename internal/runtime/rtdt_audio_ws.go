@@ -147,6 +147,8 @@ func (s *StatusServer) handleRTDTAudioWS(w http.ResponseWriter, r *http.Request,
 		// Upgrader already wrote the error response.
 		return
 	}
+	// A frame larger than this carries opus no RTDT message could hold.
+	conn.SetReadLimit(brRTDTMaxMessageBytes)
 	if s.Log != nil {
 		s.Log.Infof("RTDT audio: WS upgraded + sink registered rv=%s", rv.ShortLogID())
 	}

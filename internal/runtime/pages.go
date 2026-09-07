@@ -309,7 +309,7 @@ func (s *StatusServer) handlePagesLocalSave(w http.ResponseWriter, r *http.Reque
 	}
 	// Cap the page body so a direct (localhost) caller can't write an unbounded
 	// page; the dashboard already limits proxied requests to 1 MiB.
-	r.Body = http.MaxBytesReader(w, r.Body, 8<<20)
+	r.Body = http.MaxBytesReader(w, r.Body, brMaxPayloadBytes)
 	var req struct {
 		Name    string `json:"name"`
 		Content string `json:"content"`

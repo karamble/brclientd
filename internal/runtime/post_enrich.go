@@ -357,12 +357,6 @@ func aggregateComments(updates []rpc.PostMetadataStatus, myID, myNick string,
 	return count, len(seen), lastTS, lastNick
 }
 
-// maxEmbedServeBytes bounds a single inline embed served over /posts/embed-data.
-// A post body (and thus any one embed) is already capped by BR's max message
-// size; this makes the ceiling explicit so a crafted post cannot force an
-// outsized allocation or transfer.
-const maxEmbedServeBytes = 16 << 20
-
 // handlePostsEmbedData streams the inline payload of one --embed[...]-- tag
 // from a post body, selected by ?uid=<author>&pid=<post>&index=<n>. Only
 // data= embeds are served; download (paid file transfer) embeds 404 since
@@ -419,7 +413,9 @@ func (s *StatusServer) handlePostsEmbedData(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "invalid embed data: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	if len(raw) > maxEmbedServeBytes {
+	// The post this embed came out of already fit one BR payload, so anything
+	// larger is a crafted body asking for an outsized allocation.
+	if int64(len(raw)) > brMaxPayloadBytes {
 		http.Error(w, "embed too large", http.StatusRequestEntityTooLarge)
 		return
 	}

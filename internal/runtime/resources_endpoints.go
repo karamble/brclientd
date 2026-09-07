@@ -86,7 +86,7 @@ func (s *StatusServer) handleResourceFulfill(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	var rep resourceReply
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20)).Decode(&rep); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, brMaxPayloadBytes)).Decode(&rep); err != nil {
 		http.Error(w, "invalid reply: "+err.Error(), http.StatusBadRequest)
 		return
 	}
