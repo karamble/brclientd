@@ -475,6 +475,11 @@ func (s *StatusServer) handleGCHistory(w http.ResponseWriter, r *http.Request, g
 	var zeroUID clientintf.UserID
 	filtered := entries[:0]
 	for _, e := range entries {
+		// Protocol traffic remains in BR's raw log for the dedicated gaming
+		// replay endpoint, but never enters user-facing chat history.
+		if isGamingEnvelope(e.Message) {
+			continue
+		}
 		if ok, _ := c.FilterGCM(zeroUID, gcid, e.Message); ok {
 			continue
 		}

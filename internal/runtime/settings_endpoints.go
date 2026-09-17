@@ -297,6 +297,14 @@ func (s *StatusServer) handleFilters(w http.ResponseWriter, r *http.Request) {
 				"and they are already hidden from chat", http.StatusBadRequest)
 			return
 		}
+		// Gaming uses group chats. As with MCP and multisig, a user content
+		// filter must not consume frames before the protocol callback sees them.
+		if !req.SkipGCMs && re.MatchString(gamingSampleEnvelope) {
+			http.Error(w, "regexp matches gaming protocol frames (--gaming[...]--); "+
+				"filtering them would interrupt active games, and they are already "+
+				"hidden from chat", http.StatusBadRequest)
+			return
+		}
 		cf := clientdb.ContentFilter{
 			ID:               req.ID,
 			Regexp:           req.Regexp,

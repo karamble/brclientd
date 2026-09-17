@@ -183,6 +183,7 @@ func (s *StatusServer) Run(ctx context.Context) error {
 	mux.HandleFunc("/history/pm", s.handleHistoryPM)
 	mux.HandleFunc("/history/pm/clear", s.handleClearPMHistory)
 	mux.HandleFunc("/msig/history", s.handleMsigHistory)
+	mux.HandleFunc("/gaming/history", s.handleGamingHistory)
 	mux.HandleFunc("/contacts", s.handleContacts)
 	mux.HandleFunc("/contacts/rename", s.handleRenameContact)
 	mux.HandleFunc("/contacts/groups", s.handleContactGroups)

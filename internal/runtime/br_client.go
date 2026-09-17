@@ -1300,6 +1300,23 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 		// (from OnGCMNtfn) so structural and message events flow over the
 		// same notif bus.
 		ntfns.Register(client.OnGCMNtfn(func(ru *client.RemoteUser, gcm rpc.RMGroupMessage, ts time.Time) {
+			// Gaming envelopes are protocol traffic. Publish them on their
+			// dedicated path after BR has logged them, then stop before the
+			// ordinary chat event can badge or render the group conversation.
+			if isGamingEnvelope(gcm.Message) {
+				notifs.Publish(NotifEvent{
+					Type:      "gaming-frame",
+					Timestamp: ts,
+					Payload: map[string]any{
+						"gcid":     gcm.ID.String(),
+						"from":     ru.ID().String(),
+						"fromNick": ru.Nick(),
+						"message":  gcm.Message,
+						"mode":     int(gcm.Mode),
+					},
+				})
+				return
+			}
 			notifs.Publish(NotifEvent{
 				Type:      "gc-message",
 				Timestamp: ts,
