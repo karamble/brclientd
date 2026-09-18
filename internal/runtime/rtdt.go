@@ -30,6 +30,10 @@ import (
 //   POST   /rtdt/sessions/{rv}/kick
 //   POST   /rtdt/sessions/{rv}/remove
 //   POST   /rtdt/sessions/{rv}/rotate-cookies
+//   GET    /rtdt/sessions/{rv}/audio      (binary websocket)
+//   GET    /rtdt/sessions/{rv}/messages
+//   POST   /rtdt/sessions/{rv}/chat
+//   GET    /rtdt/invites
 //
 // All POST endpoints take JSON bodies. The {rv} path parameter is the
 // 64-char hex of the session RV. The /sessions endpoint returns the BR
@@ -373,6 +377,7 @@ func (s *StatusServer) handleRTDTAccept(w http.ResponseWriter, r *http.Request, 
 		http.Error(w, "accept: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	s.Invites.Remove(rv.String())
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -480,4 +485,19 @@ func (s *StatusServer) handleRTDTRotateCookies(w http.ResponseWriter, r *http.Re
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleRTDTInvites lists the call invitations that have arrived and not been
+// answered. Bison Relay stores each one but cannot enumerate them, so this
+// serves brclientd's own copy and is what lets the dashboard show a call that
+// came in while no browser was open.
+func (s *StatusServer) handleRTDTInvites(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(struct {
+		Invites []RTDTInvite `json:"invites"`
+	}{Invites: s.Invites.List()})
 }

@@ -74,6 +74,7 @@ type BRClientCfg struct {
 	Tracker      *Tracker
 	Notifs       *notifBus
 	AudioRouter  *RTDTAudioRouter
+	Invites      *RTDTInviteStore
 	Reinvites    *gcReinviteTracker
 	Unrepl       *unreplTracker
 	DownloadCaps *downloadCapTracker
@@ -1043,6 +1044,20 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 		notifs := cfg.Notifs
 
 		ntfns.Register(client.OnInvitedToRTDTSession(func(ru *client.RemoteUser, sess *rpc.RMRTDTSessionInvite, ts time.Time) {
+			// Bison Relay keeps the invite on disk but cannot list them back,
+			// so hold our own copy for a dashboard that loads after the call
+			// came in.
+			cfg.Invites.Add(RTDTInvite{
+				SessRV:      sess.RV.String(),
+				Inviter:     ru.ID().String(),
+				InviterNick: ru.Nick(),
+				Size:        sess.Size,
+				Description: sess.Description,
+				AsPublisher: sess.AllowedAsPublisher,
+				PeerID:      uint32(sess.PeerID),
+				IsInstant:   sess.IsInstant,
+				ReceivedMs:  ts.UnixMilli(),
+			})
 			notifs.Publish(NotifEvent{
 				Type:      "rtdt-invited",
 				Timestamp: ts,
@@ -1070,6 +1085,7 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 			})
 		}))
 		ntfns.Register(client.OnRTDTSessionInviteCanceled(func(ru *client.RemoteUser, sessID zkidentity.ShortID) {
+			cfg.Invites.Remove(sessID.String())
 			notifs.Publish(NotifEvent{
 				Type: "rtdt-invite-canceled",
 				Payload: map[string]any{
@@ -1177,6 +1193,7 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 			})
 		}))
 		ntfns.Register(client.OnRTDTSessionDissolved(func(ru *client.RemoteUser, sessRV zkidentity.ShortID, peerID rpc.RTDTPeerID) {
+			cfg.Invites.Remove(sessRV.String())
 			notifs.Publish(NotifEvent{
 				Type: "rtdt-dissolved",
 				Payload: map[string]any{

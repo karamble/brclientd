@@ -105,6 +105,7 @@ func Run(ctx context.Context, cfg Config) error {
 	tracker := NewTracker(cfg.Log)
 	notifs := newNotifBus(cfg.LogFn("NOTF"))
 	audioRouter := NewRTDTAudioRouter(cfg.LogFn("RTAU"))
+	rtdtInvites := NewRTDTInviteStore()
 	reinvites := newGCReinviteTracker()
 	unrepl := newUnreplTracker()
 	downloadCaps := newDownloadCapTracker()
@@ -133,6 +134,7 @@ func Run(ctx context.Context, cfg Config) error {
 		EmbedsRoot:        cfg.EmbedsRoot,
 		Notifs:            notifs,
 		AudioRouter:       audioRouter,
+		Invites:           rtdtInvites,
 		Reinvites:         reinvites,
 		Unrepl:            unrepl,
 		DownloadCaps:      downloadCaps,
@@ -201,6 +203,7 @@ func Run(ctx context.Context, cfg Config) error {
 		Tracker:         tracker,
 		Notifs:          notifs,
 		AudioRouter:     audioRouter,
+		Invites:         rtdtInvites,
 		Reinvites:       reinvites,
 		Unrepl:          unrepl,
 		DownloadCaps:    downloadCaps,

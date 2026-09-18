@@ -52,6 +52,7 @@ type StatusServer struct {
 	DataDir      string
 	Notifs       *notifBus
 	AudioRouter  *RTDTAudioRouter
+	Invites      *RTDTInviteStore
 	Reinvites    *gcReinviteTracker
 	Unrepl       *unreplTracker
 	DownloadCaps *downloadCapTracker
@@ -264,6 +265,7 @@ func (s *StatusServer) Run(ctx context.Context) error {
 	mux.HandleFunc("/stats/network", s.handleStatsNetwork)
 	mux.HandleFunc("/stats/contacts", s.handleStatsContacts)
 	mux.HandleFunc("/stats/posts", s.handleStatsPosts)
+	mux.HandleFunc("/rtdt/invites", s.handleRTDTInvites)
 	mux.HandleFunc("/rtdt/sessions", s.handleRTDT)
 	mux.HandleFunc("/rtdt/sessions/", s.handleRTDT)
 	mux.HandleFunc("/gc", s.handleGC)
