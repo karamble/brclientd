@@ -386,6 +386,15 @@ func (s *StatusServer) handleRTDTJoin(w http.ResponseWriter, r *http.Request, rv
 	if c == nil {
 		return
 	}
+	// Refuse to join before the session owner's own publisher entry has
+	// arrived. Bison Relay keys a peer the first time it sees data from it and
+	// never revisits that decision, so joining early caches the owner as
+	// unkeyed and silences them for the rest of the call.
+	if sess, err := c.GetRTDTSession(&rv); err == nil && keysNotArrived(sess) {
+		http.Error(w, "session keys have not arrived yet; try again shortly",
+			http.StatusConflict)
+		return
+	}
 	if s.Log != nil {
 		s.Log.Infof("RTDT join: calling JoinLiveRTDTSession rv=%s", rv.ShortLogID())
 	}
@@ -500,4 +509,12 @@ func (s *StatusServer) handleRTDTInvites(w http.ResponseWriter, r *http.Request)
 	_ = json.NewEncoder(w).Encode(struct {
 		Invites []RTDTInvite `json:"invites"`
 	}{Invites: s.Invites.List()})
+}
+
+// keysNotArrived reports whether a session is still on its creation generation,
+// meaning no session update has been received and the other side's publisher
+// key is not known yet. Joining in that state makes Bison Relay cache the peer
+// as unkeyed, which silences them for the rest of the call.
+func keysNotArrived(sess *clientdb.RTDTSession) bool {
+	return sess != nil && sess.Metadata.Generation == 0
 }
