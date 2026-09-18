@@ -1099,12 +1099,12 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 			notifs.Publish(NotifEvent{
 				Type: "rtdt-session-updated",
 				Payload: map[string]any{
-					"by":              ru.ID().String(),
-					"byNick":          ru.Nick(),
-					"sessRV":          update.SessionRV.String(),
-					"initialJoin":     update.InitialJoin,
-					"addedPublishers": len(update.NewPublishers),
-					"removedPubs":     len(update.RemovedPublishers),
+					"by":                ru.ID().String(),
+					"byNick":            ru.Nick(),
+					"sessRV":            update.SessionRV.String(),
+					"initialJoin":       update.InitialJoin,
+					"addedPublishers":   len(update.NewPublishers),
+					"removedPublishers": len(update.RemovedPublishers),
 				},
 			})
 		}))
