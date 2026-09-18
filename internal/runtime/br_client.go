@@ -21,7 +21,7 @@ import (
 	"github.com/companyzero/bisonrelay/client/resources"
 	"github.com/companyzero/bisonrelay/ratchet"
 	"github.com/companyzero/bisonrelay/rpc"
-	// rtdtclient "github.com/companyzero/bisonrelay/rtdt/client" // dormant: RTDT audio hook is fork-only (see below)
+	rtdtclient "github.com/companyzero/bisonrelay/rtdt/client"
 	"github.com/companyzero/bisonrelay/zkidentity"
 	"github.com/decred/dcrlnd/lnrpc"
 	"github.com/decred/go-socks/socks"
@@ -1495,27 +1495,19 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 		}))
 	}
 
-	// Audio handler: when a sink is registered for the session (Phase 3 WS
-	// endpoint does this), forward the decrypted Opus packet to it.
-	// Otherwise the router drops + counts the frame. Without this hook
-	// stock BR would route audio into c.noterec which is a malgo native
-	// device that does not exist in our container.
-	// RTDT audio hook: dormant on the upstream-pinned build. Config.RTDTAudioStreamHandler
-	// (set below) exists only in the karamble/bisonrelay fork, so this handler is
-	// commented out here. Re-enable this block, the import above, the Config field
-	// below, and the go.mod replace to build the fork variant with live RTDT audio.
-	// var audioHandler rtdtclient.StreamHandler
-	// if cfg.AudioRouter != nil {
-	// 	router := cfg.AudioRouter
-	// 	audioHandler = func(sess *rtdtclient.Session, enc *rpc.RTDTFramedPacket, plain *rpc.RTDTDataPacket) error {
-	// 		rv := sess.RV()
-	// 		if rv == nil {
-	// 			return nil
-	// 		}
-	// 		router.Dispatch(*rv, enc.Source, plain.Data, plain.Timestamp)
-	// 		return nil
-	// 	}
-	// }
+	// Call audio arrives on the Random stream rather than Speech. BR hardwires the
+	// Speech handler to a local sound device this container does not have, but it
+	// leaves RTDTRandomStreamHandler open for callers to set, so peers that are
+	// also dcrpulse send their Opus there and the router forwards each frame to
+	// whichever browser WebSocket is attached to the session.
+	var audioHandler rtdtclient.StreamHandler
+	if cfg.AudioRouter != nil {
+		router := cfg.AudioRouter
+		audioHandler = func(sess *rtdtclient.Session, enc *rpc.RTDTFramedPacket, plain *rpc.RTDTDataPacket) error {
+			dispatchCallAudio(router, sess.RV(), enc.Source, plain.Data, plain.Timestamp)
+			return nil
+		}
+	}
 
 	// Host our own markdown pages from PagesDir via a filesystem resource
 	// bound at the root prefix. This is the brclient "pages:" equivalent and
@@ -1529,13 +1521,13 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 	resProvider := cfg.ResProvider
 
 	brCfg := client.Config{
-		DB:            cfg.DB,
-		PayClient:     cfg.PayClient,
-		Dialer:        dialer,
-		Notifications: ntfns,
-		Logger:        cfg.LogFn,
-		// RTDTAudioStreamHandler: audioHandler, // fork-only; dormant on upstream BR
-		ResourcesProvider: resProvider,
+		DB:                      cfg.DB,
+		PayClient:               cfg.PayClient,
+		Dialer:                  dialer,
+		Notifications:           ntfns,
+		Logger:                  cfg.LogFn,
+		RTDTRandomStreamHandler: audioHandler,
+		ResourcesProvider:       resProvider,
 		// Auto-subscribe to posts on first-time KX with a new contact.
 		// BR's gating in client_kx.go:277 ensures this only fires on a
 		// fresh KX (updateAB && !oldUser) and defers to any prior

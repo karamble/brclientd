@@ -99,7 +99,7 @@ func (s *wsAudioSink) OnSpeech(peerID rpc.RTDTPeerID, opus []byte, timestamp uin
 //   - Register/Unregister the WS as the AudioRouter sink (only one per rv;
 //     second tab gets 409)
 //   - Outbound pump runs in a goroutine, reads WS frames, calls
-//     SendSpeechPacket on the live BR session
+//     SendRandomData on the live BR session
 //   - On WS close or context done, both pumps exit and the sink unregisters
 func (s *StatusServer) handleRTDTAudioWS(w http.ResponseWriter, r *http.Request, rv zkidentity.ShortID) {
 	if s.Log != nil {
@@ -170,7 +170,7 @@ func (s *StatusServer) handleRTDTAudioWS(w http.ResponseWriter, r *http.Request,
 
 	// Outbound state: a frame-counted timestamp (mirroring bruig's
 	// internal/audio/streams.go:201). Starts at 0, advances by 20 per
-	// SendSpeechPacket call.
+	// packet sent.
 	var outTS uint32
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
@@ -196,7 +196,7 @@ func (s *StatusServer) handleRTDTAudioWS(w http.ResponseWriter, r *http.Request,
 		}
 	}()
 
-	rtSess := liveSess.RTSess
+	var warnedNoSession bool
 	for {
 		msgType, payload, err := conn.ReadMessage()
 		if err != nil {
@@ -218,12 +218,31 @@ func (s *StatusServer) handleRTDTAudioWS(w http.ResponseWriter, r *http.Request,
 		if len(opus) == 0 {
 			continue
 		}
-		if err := rtSess.SendSpeechPacket(ctx, opus, outTS); err != nil {
-			// SendSpeechPacket fails on session teardown or wallet
-			// allowance exhaustion. Log via the router so we have a
-			// single observability surface for audio issues.
+		// Resolve the session per frame instead of capturing it once: leaving
+		// and rejoining builds a fresh session object, and a captured one
+		// would report itself left for as long as the socket stayed open.
+		cur := c.GetLiveRTSession(&rv)
+		if cur == nil || cur.RTSess == nil {
+			// Ride out the gap rather than tearing the socket down; one
+			// dropped 20 ms frame is inaudible.
+			if !warnedNoSession && s.Log != nil {
+				s.Log.Warnf("RTDT audio: session not live, dropping frames rv=%s", rv.ShortLogID())
+			}
+			warnedNoSession = true
+			continue
+		}
+		warnedNoSession = false
+
+		// Call audio goes out on the Random stream, the one a dcrpulse peer
+		// can receive on. bruig and brclient listen only on Speech and so
+		// hear nothing from us; sending both streams would cover them at the
+		// cost of draining a session's prepaid allowance twice as fast.
+		if err := cur.RTSess.SendRandomData(ctx, opus, outTS); err != nil {
+			// Fails once the session is torn down or the datagram write
+			// errors; allowance is settled asynchronously and never
+			// surfaces here.
 			if s.Log != nil && !errors.Is(err, context.Canceled) {
-				s.Log.Warnf("SendSpeechPacket session=%s err=%v", rv.ShortLogID(), err)
+				s.Log.Warnf("SendRandomData session=%s err=%v", rv.ShortLogID(), err)
 			}
 			break
 		}

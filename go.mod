@@ -33,12 +33,11 @@ require (
 	golang.org/x/oauth2 v0.36.0 // indirect
 )
 
-// Use our fork with the RTDTAudioStreamHandler / RTDTChatStreamHandler
-// Config hooks (see br-audio-hook gist in memory). Reverts to upstream
-// once the patch lands there.
-// Pinned to upstream Bison Relay. RTDT audio needs the fork (it adds the
-// Config.RTDTAudioStreamHandler hook); to build the fork variant, re-enable the
-// replace below together with the dormant audio-hook code in br_client.go.
+// Pinned to upstream Bison Relay. Call audio works on this pin: it rides the
+// Random stream, whose handler upstream leaves open. Hearing a bruig or
+// brclient peer additionally needs Config.RTDTAudioStreamHandler, which exists
+// only in our fork; that patch is one commit and must be cherry-picked onto the
+// pin above rather than used from the branch below, which predates it.
 // replace github.com/companyzero/bisonrelay => github.com/karamble/bisonrelay v0.0.0-20260523194908-7c5686d92657
 
 require (

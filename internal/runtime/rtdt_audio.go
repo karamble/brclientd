@@ -22,7 +22,7 @@ type AudioSink interface {
 }
 
 // RTDTAudioRouter is the in-process broker between BR's audio callback
-// (one process-wide handler set via Config.RTDTAudioStreamHandler) and
+// (one process-wide handler set via Config.RTDTRandomStreamHandler) and
 // the per-session WebSocket sinks the dashboard's WS proxy upgrades into.
 // Routing key is the session RV. A session with no sink simply drops
 // frames; that is the steady state for sessions we are joined to but
@@ -104,7 +104,7 @@ func (r *RTDTAudioRouter) Dispatch(sessRV zkidentity.ShortID, peerID rpc.RTDTPee
 
 // logFirstFrame emits an Info log the first time we see audio for a given
 // (session, peer) pair. Used for Phase 2 validation that the BR fork's
-// RTDTAudioStreamHandler hook is actually firing in production.
+// Random stream handler is actually firing in production.
 func (r *RTDTAudioRouter) logFirstFrame(sessRV zkidentity.ShortID, peerID rpc.RTDTPeerID, n int) {
 	if r.log == nil {
 		return
@@ -144,4 +144,14 @@ func peerIDKey(p rpc.RTDTPeerID) string {
 // Counters returns (seen, dropped) snapshots for diagnostic exposure.
 func (r *RTDTAudioRouter) Counters() (seen, dropped uint64) {
 	return r.framesSeen.Load(), r.framesDropped.Load()
+}
+
+// dispatchCallAudio hands one inbound call frame to the router. A session that
+// reports no RV is not routable, so its frames are ignored rather than dropped
+// against a zero key that would collide across sessions.
+func dispatchCallAudio(router *RTDTAudioRouter, sessRV *zkidentity.ShortID, peerID rpc.RTDTPeerID, opus []byte, timestamp uint32) {
+	if router == nil || sessRV == nil {
+		return
+	}
+	router.Dispatch(*sessRV, peerID, opus, timestamp)
 }
