@@ -123,7 +123,16 @@ func Run(ctx context.Context, cfg Config) error {
 	// identity check below, because the pre-setup endpoint claims port
 	// 7676 in the no-identity case and would conflict with an early
 	// clientrpc bind.
+	// One dialer for everything brclientd sends out: the relay, the BR
+	// client's own HTTP, the seeder query and the price fallback.
+	outDial := proxyDialFunc(proxySettings{
+		Addr: cfg.ProxyAddr, User: cfg.ProxyUser, Pass: cfg.ProxyPass,
+		Isolation: cfg.TorIsolation, CircuitLimit: cfg.CircuitLimit,
+	})
+	outHTTP := outboundHTTPClient(outDial)
+
 	statusSrv := &StatusServer{
+		Outbound:          outHTTP,
 		Log:               cfg.LogFn("STAT"),
 		Certs:             cfg.Certs,
 		Listen:            cfg.StatusListen,
@@ -172,7 +181,7 @@ func Run(ctx context.Context, cfg Config) error {
 		if err := waitForDcrlndUnlocked(gctx, dcrlndPay, tracker, cfg.LogFn("LNGT")); err != nil {
 			return err
 		}
-		if err := waitForChannelToHub(gctx, dcrlndPay, tracker, cfg.LogFn("CHGT")); err != nil {
+		if err := waitForChannelToHub(gctx, dcrlndPay, tracker, outHTTP, cfg.LogFn("CHGT")); err != nil {
 			return err
 		}
 	}
@@ -195,6 +204,7 @@ func Run(ctx context.Context, cfg Config) error {
 		BRServerDirect:  cfg.BRServerDirect,
 		SeederCachePath: cfg.SeederCachePath,
 		MsgsRoot:        cfg.MsgsRoot,
+		Dial:            outDial,
 		ProxyAddr:       cfg.ProxyAddr,
 		ProxyUser:       cfg.ProxyUser,
 		ProxyPass:       cfg.ProxyPass,

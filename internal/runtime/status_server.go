@@ -40,6 +40,9 @@ import (
 // /history/pm for paginated PM history reads (a wire-exposed wrapper around
 // clientdb.ReadLogPM since BR's clientrpc.proto has no history RPC).
 type StatusServer struct {
+	// Outbound is the client for brclientd's own third-party requests; it
+	// follows the proxy setting. Nil means a direct client.
+	Outbound     *http.Client
 	Log          slog.Logger
 	Certs        certgen.Triplet
 	Listen       string
@@ -1900,7 +1903,7 @@ func (s *StatusServer) handleRates(w http.ResponseWriter, r *http.Request) {
 	source := "bisonrelay"
 	if dcrUSD <= 0 {
 		source = ""
-		if kd := krakenDCRUSD(r.Context()); kd > 0 {
+		if kd := krakenDCRUSD(r.Context(), s.outbound()); kd > 0 {
 			dcrUSD, btcUSD, source = kd, 0, "kraken"
 		}
 	}
@@ -2361,14 +2364,14 @@ var krakenRate struct {
 // krakenDCRUSD returns a DCR/USD price from Kraken, fetching at most once per
 // krakenMinInterval and otherwise returning the cached value (0 if never
 // fetched). Only called when BR has no rate of its own.
-func krakenDCRUSD(ctx context.Context) float64 {
+func krakenDCRUSD(ctx context.Context, httpc *http.Client) float64 {
 	krakenRate.mu.Lock()
 	defer krakenRate.mu.Unlock()
 	if !krakenRate.lastTry.IsZero() && time.Since(krakenRate.lastTry) < krakenMinInterval {
 		return krakenRate.dcrUSD
 	}
 	krakenRate.lastTry = time.Now()
-	price, err := fetchKrakenDCRUSD(ctx)
+	price, err := fetchKrakenDCRUSD(ctx, httpc)
 	if err != nil {
 		// Keep any earlier value; the throttle prevents an immediate retry.
 		return krakenRate.dcrUSD
@@ -2379,7 +2382,7 @@ func krakenDCRUSD(ctx context.Context) float64 {
 
 // fetchKrakenDCRUSD pulls the last-trade DCR/USD price from Kraken's public
 // ticker (a clearnet call; no .onion endpoint exists).
-func fetchKrakenDCRUSD(ctx context.Context) (float64, error) {
+func fetchKrakenDCRUSD(ctx context.Context, httpc *http.Client) (float64, error) {
 	reqCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet,
@@ -2387,7 +2390,7 @@ func fetchKrakenDCRUSD(ctx context.Context) (float64, error) {
 	if err != nil {
 		return 0, err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpc.Do(req)
 	if err != nil {
 		return 0, err
 	}
@@ -3870,4 +3873,11 @@ func (s *StatusServer) handleStatsPosts(w http.ResponseWriter, r *http.Request) 
 		SubscriptionsCnt: len(subs),
 		Subscribers:      subscriberRows,
 	})
+}
+
+func (s *StatusServer) outbound() *http.Client {
+	if s.Outbound != nil {
+		return s.Outbound
+	}
+	return outboundHTTPClient(proxyDialFunc(proxySettings{}))
 }

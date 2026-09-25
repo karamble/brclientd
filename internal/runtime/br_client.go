@@ -24,7 +24,6 @@ import (
 	rtdtclient "github.com/companyzero/bisonrelay/rtdt/client"
 	"github.com/companyzero/bisonrelay/zkidentity"
 	"github.com/decred/dcrlnd/lnrpc"
-	"github.com/decred/go-socks/socks"
 	"github.com/decred/slog"
 	"github.com/karamble/brmcp"
 
@@ -57,6 +56,9 @@ func buildBRDownloadTag(nick, filename string, size uint64) string {
 // LN-only surfaces (CheckServerSession's wallet check, the storefront sale
 // capacity probe) are skipped when it is nil.
 type BRClientCfg struct {
+	// Dial is the outbound dialer shared with the rest of the runtime; when
+	// nil one is built from the proxy fields below.
+	Dial            clientintf.DialFunc
 	DB              *clientdb.DB
 	PayClient       clientintf.PaymentClient
 	DcrlndPay       *client.DcrlnPaymentClient
@@ -107,23 +109,12 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 	// (Tor). Stream isolation uses a per-connection circuit pool; otherwise a
 	// single proxy dialer. The dcrlnd gRPC connection is separate and stays
 	// direct. Mirrors decred/dcrd and upstream brclient.
-	var dialFunc clientintf.DialFunc = (&net.Dialer{}).DialContext
-	if cfg.ProxyAddr != "" {
-		proxy := socks.Proxy{
-			Addr:         cfg.ProxyAddr,
-			Username:     cfg.ProxyUser,
-			Password:     cfg.ProxyPass,
-			TorIsolation: cfg.TorIsolation,
-		}
-		if cfg.TorIsolation {
-			limit := cfg.CircuitLimit
-			if limit == 0 {
-				limit = 32
-			}
-			dialFunc = socks.NewPool(proxy, limit).DialContext
-		} else {
-			dialFunc = proxy.DialContext
-		}
+	dialFunc := cfg.Dial
+	if dialFunc == nil {
+		dialFunc = proxyDialFunc(proxySettings{
+			Addr: cfg.ProxyAddr, User: cfg.ProxyUser, Pass: cfg.ProxyPass,
+			Isolation: cfg.TorIsolation, CircuitLimit: cfg.CircuitLimit,
+		})
 	}
 	var dialer clientintf.Dialer
 	if cfg.BRServerDirect {
@@ -1538,10 +1529,14 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 	resProvider := cfg.ResProvider
 
 	brCfg := client.Config{
-		DB:                      cfg.DB,
-		PayClient:               cfg.PayClient,
-		Dialer:                  dialer,
-		Notifications:           ntfns,
+		DB:            cfg.DB,
+		PayClient:     cfg.PayClient,
+		Dialer:        dialer,
+		Notifications: ntfns,
+		// The client's own outbound HTTP (rate collection) follows the
+		// proxy too, and prefers onion endpoints when there is one.
+		DialFunc:                proxiedDial(cfg.ProxyAddr, dialFunc),
+		UseOnion:                cfg.ProxyAddr != "",
 		Logger:                  cfg.LogFn,
 		RTDTRandomStreamHandler: audioHandler,
 		ResourcesProvider:       resProvider,
@@ -1775,4 +1770,13 @@ func sweepContactGroups(c *client.Client, groups *contactGroupsStore, notifs *no
 		}
 	}
 	groups.prune(valid)
+}
+
+// proxiedDial is the dialer handed to the BR client for its own HTTP: nil
+// (the client's default) without a proxy, the proxy dialer otherwise.
+func proxiedDial(proxyAddr string, dial clientintf.DialFunc) clientintf.DialFunc {
+	if proxyAddr == "" {
+		return nil
+	}
+	return dial
 }

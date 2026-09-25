@@ -38,7 +38,7 @@ type seederResponse struct {
 // resolveHubPeer queries the seeder once for the recommended hub LN node.
 // On any failure (network, rate limit, parse) it returns the hardcoded
 // fallback values.
-func resolveHubPeer(ctx context.Context, log slog.Logger) (pubkey, uri string) {
+func resolveHubPeer(ctx context.Context, httpc *http.Client, log slog.Logger) (pubkey, uri string) {
 	fallback := fallbackHubPubkey + "@" + fallbackHubAddr
 
 	queryCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
@@ -48,7 +48,7 @@ func resolveHubPeer(ctx context.Context, log slog.Logger) (pubkey, uri string) {
 		log.Warnf("seeder request build failed; using hardcoded hub0: %v", err)
 		return fallbackHubPubkey, fallback
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpc.Do(req)
 	if err != nil {
 		log.Warnf("seeder query failed; using hardcoded hub0: %v", err)
 		return fallbackHubPubkey, fallback
@@ -83,8 +83,8 @@ func resolveHubPeer(ctx context.Context, log slog.Logger) (pubkey, uri string) {
 // the seeder-recommended hub exists. The seeder is queried once at the
 // start; subsequent retries only touch the local dcrlnd, so this gate
 // cannot trip the seeder rate limit.
-func waitForChannelToHub(ctx context.Context, pc *client.DcrlnPaymentClient, tracker *Tracker, log slog.Logger) error {
-	hubPubkey, hubURI := resolveHubPeer(ctx, log)
+func waitForChannelToHub(ctx context.Context, pc *client.DcrlnPaymentClient, tracker *Tracker, httpc *http.Client, log slog.Logger) error {
+	hubPubkey, hubURI := resolveHubPeer(ctx, httpc, log)
 	tracker.SetRecommendedPeer(hubURI)
 
 	const (
