@@ -134,8 +134,8 @@ func (s *StatusServer) handleSetAvatar(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleSendMessage sends a private message to a user, replicating clientrpc
-// ChatService.PM. user may be a nick, alias, or hex peer UID (UserByNick
-// resolves all three).
+// ChatService.PM. user is the peer's hex uid or its exact nick or alias
+// (resolveRecipient).
 func (s *StatusServer) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -159,7 +159,7 @@ func (s *StatusServer) handleSendMessage(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "user is required", http.StatusBadRequest)
 		return
 	}
-	user, err := c.UserByNick(req.User)
+	user, err := resolveRecipient(c, req.User)
 	if err != nil {
 		http.Error(w, "resolve user: "+err.Error(), http.StatusBadGateway)
 		return
@@ -269,7 +269,7 @@ func (s *StatusServer) handleTip(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "user is required", http.StatusBadRequest)
 		return
 	}
-	user, err := c.UserByNick(req.User)
+	user, err := resolveRecipient(c, req.User)
 	if err != nil {
 		http.Error(w, "resolve user: "+err.Error(), http.StatusBadGateway)
 		return

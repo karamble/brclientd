@@ -3278,7 +3278,7 @@ func (s *StatusServer) handleSendFile(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	ru, err := c.UserByNick(userField)
+	ru, err := resolveRecipient(c, userField)
 	if err != nil {
 		http.Error(w, "user lookup: "+err.Error(), http.StatusNotFound)
 		return

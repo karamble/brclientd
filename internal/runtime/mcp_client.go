@@ -31,7 +31,7 @@ import (
 type mcpSender struct{ c *client.Client }
 
 func (s mcpSender) SendPM(ctx context.Context, peer, text string) error {
-	user, err := s.c.UserByNick(peer)
+	user, err := resolveRecipient(s.c, peer)
 	if err != nil {
 		return err
 	}
@@ -88,7 +88,7 @@ func (p *mcpTipPayer) Pay(ctx context.Context, payeeUID string, atoms int64) err
 	if dl, ok := ctx.Deadline(); ok {
 		waitSecs = int(math.Round(time.Until(dl).Seconds()))
 	}
-	user, err := p.c.UserByNick(payeeUID)
+	user, err := resolveRecipient(p.c, payeeUID)
 	if err != nil {
 		return err
 	}
