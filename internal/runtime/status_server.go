@@ -78,6 +78,9 @@ type StatusServer struct {
 	clientMu sync.RWMutex
 	client   *client.Client
 
+	ratesMu sync.RWMutex
+	rates   *ratesSwitch
+
 	// backupMu serializes /backup requests; the backup holds a clientdb read
 	// transaction while it tars the whole data dir.
 	backupMu sync.Mutex
@@ -117,6 +120,21 @@ func (s *StatusServer) SetStoreController(ctrl *storeController) {
 
 // SetLNPay wires the dcrlnd payment client so /downloads can decode the
 // per-chunk invoices a paid download was bought with into a paid-amount total.
+// SetRatesSwitch wires the exchange-rate fetcher switch the exchangeRates
+// behavior setting drives.
+func (s *StatusServer) SetRatesSwitch(r *ratesSwitch) {
+	s.ratesMu.Lock()
+	defer s.ratesMu.Unlock()
+	s.rates = r
+}
+
+// ratesOn reports whether exchange rates are being fetched.
+func (s *StatusServer) ratesOn() bool {
+	s.ratesMu.RLock()
+	defer s.ratesMu.RUnlock()
+	return s.rates != nil && s.rates.On()
+}
+
 func (s *StatusServer) SetLNPay(pc *client.DcrlnPaymentClient) {
 	s.lnPayMu.Lock()
 	defer s.lnPayMu.Unlock()
@@ -1892,6 +1910,19 @@ func (s *StatusServer) handleBackup(w http.ResponseWriter, r *http.Request) {
 func (s *StatusServer) handleRates(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	// Exchange rates turned off: no price, and no Kraken fallback either.
+	if !s.ratesOn() {
+		rateState.mu.Lock()
+		rateState.dcrUSD, rateState.btcUSD, rateState.source, rateState.updatedAt = 0, 0, "", time.Time{}
+		rateState.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(struct {
+			DCRUSD float64 `json:"dcr_usd"`
+			BTCUSD float64 `json:"btc_usd"`
+			Source string  `json:"source"`
+		}{})
 		return
 	}
 	c := s.currentClient()

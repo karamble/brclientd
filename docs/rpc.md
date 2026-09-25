@@ -195,7 +195,7 @@ config file).
 | `/tip` | send a Lightning tip to a user |
 | `/payments/tips` | tip attempt history |
 | `/payments/tips/running` | in-flight tip attempts |
-| `/rates` | DCR exchange rates |
+| `/rates` | DCR exchange rates (zeros when the exchangeRates setting is off) |
 
 ### Stats
 
@@ -212,7 +212,7 @@ config file).
 
 | Route | Purpose |
 | ----- | ------- |
-| `/settings/behavior` | runtime behavior settings (receipts, compression, auto-handshake) |
+| `/settings/behavior` | runtime behavior settings (receipts, compression, auto-handshake, exchange rates; exchange rates apply without a restart) |
 | `/filters` | list and save content filters |
 | `/filters/delete` | delete a content filter |
 

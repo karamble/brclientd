@@ -91,11 +91,14 @@ func (s *StatusServer) handleConnection(w http.ResponseWriter, r *http.Request) 
 func (s *StatusServer) handleBehavior(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
+		// Exchange rates apply live, so their effective value is the fetcher's.
+		effective := s.EffectiveBehavior
+		effective.ExchangeRates = s.ratesOn()
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(struct {
 			Saved     brBehavior `json:"saved"`
 			Effective brBehavior `json:"effective"`
-		}{Saved: s.Settings.behavior(), Effective: s.EffectiveBehavior})
+		}{Saved: s.Settings.behavior(), Effective: effective})
 	case http.MethodPost:
 		var u brBehaviorUpdate
 		if err := json.NewDecoder(r.Body).Decode(&u); err != nil {
@@ -105,6 +108,14 @@ func (s *StatusServer) handleBehavior(w http.ResponseWriter, r *http.Request) {
 		if err := s.Settings.applyBehavior(u); err != nil {
 			http.Error(w, "persist settings: "+err.Error(), http.StatusInternalServerError)
 			return
+		}
+		if u.ExchangeRates != nil {
+			s.ratesMu.RLock()
+			rates := s.rates
+			s.ratesMu.RUnlock()
+			if rates != nil {
+				rates.Set(*u.ExchangeRates)
+			}
 		}
 		w.WriteHeader(http.StatusNoContent)
 	default:

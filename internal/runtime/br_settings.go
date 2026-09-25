@@ -23,6 +23,7 @@ type brSettings struct {
 	AutoHandshakeDays   *int      `json:"auto_handshake_days,omitempty"`
 	GCInviteDays        *int      `json:"gc_invite_days,omitempty"`
 	TrackRTDTChat       *bool     `json:"track_rtdt_chat,omitempty"`
+	ExchangeRates       *bool     `json:"exchange_rates,omitempty"`
 
 	// Advanced tuning (client.Config timing/level values).
 	CompressLevel       *int `json:"compress_level,omitempty"`
@@ -54,6 +55,8 @@ const (
 	// default: the dashboard's in-call chat history needs the client to store
 	// RTDT messages (client.Config.TrackRTDTChatMessages).
 	defaultTrackRTDTChat = true
+	// defaultExchangeRates keeps BR's rate feed on, as brclient and bruig run it.
+	defaultExchangeRates = true
 
 	// Advanced tuning defaults; MUST equal the client's setDefaults
 	// (client/client.go). 0 is not a disable here.
@@ -90,6 +93,7 @@ type brBehavior struct {
 	AutoHandshakeDays   int      `json:"autoHandshakeDays"`
 	GCInviteDays        int      `json:"gcInviteDays"`
 	TrackRTDTChat       bool     `json:"trackRtdtChat"`
+	ExchangeRates       bool     `json:"exchangeRates"`
 
 	CompressLevel       int `json:"compressLevel"`
 	ReconnectSecs       int `json:"reconnectSecs"`
@@ -114,6 +118,7 @@ type brBehaviorUpdate struct {
 	AutoHandshakeDays   *int      `json:"autoHandshakeDays,omitempty"`
 	GCInviteDays        *int      `json:"gcInviteDays,omitempty"`
 	TrackRTDTChat       *bool     `json:"trackRtdtChat,omitempty"`
+	ExchangeRates       *bool     `json:"exchangeRates,omitempty"`
 
 	CompressLevel       *int `json:"compressLevel,omitempty"`
 	ReconnectSecs       *int `json:"reconnectSecs,omitempty"`
@@ -174,6 +179,7 @@ func (s *brSettingsStore) behavior() brBehavior {
 		AutoHandshakeDays:   defaultAutoHandshakeDays,
 		GCInviteDays:        defaultGCInviteDays,
 		TrackRTDTChat:       defaultTrackRTDTChat,
+		ExchangeRates:       defaultExchangeRates,
 
 		CompressLevel:       defaultCompressLevel,
 		ReconnectSecs:       defaultReconnectSecs,
@@ -208,6 +214,9 @@ func (s *brSettingsStore) behavior() brBehavior {
 	}
 	if cur.TrackRTDTChat != nil {
 		b.TrackRTDTChat = *cur.TrackRTDTChat
+	}
+	if cur.ExchangeRates != nil {
+		b.ExchangeRates = *cur.ExchangeRates
 	}
 	if cur.CompressLevel != nil {
 		b.CompressLevel = *cur.CompressLevel
@@ -278,6 +287,9 @@ func (s *brSettingsStore) applyBehavior(u brBehaviorUpdate) error {
 	}
 	if u.TrackRTDTChat != nil {
 		cur.TrackRTDTChat = clearIfDefaultBool(*u.TrackRTDTChat, defaultTrackRTDTChat)
+	}
+	if u.ExchangeRates != nil {
+		cur.ExchangeRates = clearIfDefaultBool(*u.ExchangeRates, defaultExchangeRates)
 	}
 	if u.CompressLevel != nil {
 		cur.CompressLevel = clearIfDefaultInt(*u.CompressLevel, defaultCompressLevel)
