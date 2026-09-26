@@ -7,6 +7,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -144,5 +145,24 @@ func TestBehaviorEndpointSwitchesExchangeRatesLive(t *testing.T) {
 	}
 	if got.Saved.ExchangeRates || got.Effective.ExchangeRates {
 		t.Fatalf("saved %v effective %v", got.Saved.ExchangeRates, got.Effective.ExchangeRates)
+	}
+}
+
+// kraken answers every request with a DCR/USD ticker whose last price is price.
+type kraken string
+
+func (k kraken) RoundTrip(*http.Request) (*http.Response, error) {
+	body := `{"error":[],"result":{"DCRUSD":{"c":["` + string(k) + `","1.0"]}}}`
+	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: http.Header{}}, nil
+}
+
+func TestKrakenFallbackRefusesPricesThatAreNotFiniteAndPositive(t *testing.T) {
+	for _, bad := range []string{"NaN", "Inf", "+Infinity", "1e400", "-5", "0"} {
+		if p, err := fetchKrakenDCRUSD(context.Background(), &http.Client{Transport: kraken(bad)}); err == nil {
+			t.Fatalf("%q accepted as %v", bad, p)
+		}
+	}
+	if p, err := fetchKrakenDCRUSD(context.Background(), &http.Client{Transport: kraken("18.25")}); err != nil || p != 18.25 {
+		t.Fatalf("18.25 read as %v, %v", p, err)
 	}
 }

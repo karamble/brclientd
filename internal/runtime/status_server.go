@@ -2443,7 +2443,11 @@ func fetchKrakenDCRUSD(ctx context.Context, httpc *http.Client) (float64, error)
 	}
 	for _, v := range kr.Result {
 		if len(v.C) > 0 {
-			return strconv.ParseFloat(v.C[0], 64)
+			price, err := strconv.ParseFloat(v.C[0], 64)
+			if err != nil || !(price > 0) || math.IsInf(price, 1) {
+				return 0, fmt.Errorf("kraken: unusable price %q", v.C[0])
+			}
+			return price, nil
 		}
 	}
 	return 0, fmt.Errorf("kraken: empty result")
