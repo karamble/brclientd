@@ -112,6 +112,7 @@ func Run(ctx context.Context, cfg Config) error {
 	notes := newNotificationStore(cfg.DataDir)
 	brSettings := newBRSettingsStore(cfg.DataDir)
 	groups := newContactGroupsStore(cfg.DataDir)
+	gamingJournal := newGamingJournal(cfg.DataDir, cfg.LogFn("GAMJ"))
 	effectiveBehavior := brSettings.behavior()
 	restartCh := make(chan struct{})
 
@@ -149,6 +150,7 @@ func Run(ctx context.Context, cfg Config) error {
 		DownloadCaps:      downloadCaps,
 		Notes:             notes,
 		Groups:            groups,
+		GamingJournal:     gamingJournal,
 		Settings:          brSettings,
 		EffectiveBehavior: effectiveBehavior,
 		RestartCh:         restartCh,
@@ -219,6 +221,7 @@ func Run(ctx context.Context, cfg Config) error {
 		DownloadCaps:    downloadCaps,
 		Notes:           notes,
 		Groups:          groups,
+		GamingJournal:   gamingJournal,
 		Behavior:        effectiveBehavior,
 		LogFn:           cfg.LogFn,
 		IdentityChan:    identityChan,

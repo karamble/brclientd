@@ -42,27 +42,28 @@ import (
 type StatusServer struct {
 	// Outbound is the client for brclientd's own third-party requests; it
 	// follows the proxy setting. Nil means a direct client.
-	Outbound     *http.Client
-	Log          slog.Logger
-	Certs        certgen.Triplet
-	Listen       string
-	Tracker      *Tracker
-	DB           *clientdb.DB
-	UploadDir    string
-	MsgsRoot     string
-	EmbedsRoot   string
-	PagesDir     string
-	DataDir      string
-	Notifs       *notifBus
-	AudioRouter  *RTDTAudioRouter
-	Invites      *RTDTInviteStore
-	Reinvites    *gcReinviteTracker
-	Unrepl       *unreplTracker
-	DownloadCaps *downloadCapTracker
-	Notes        *notificationStore
-	Groups       *contactGroupsStore
-	AppName      string
-	AppVersion   string
+	Outbound      *http.Client
+	Log           slog.Logger
+	Certs         certgen.Triplet
+	Listen        string
+	Tracker       *Tracker
+	DB            *clientdb.DB
+	UploadDir     string
+	MsgsRoot      string
+	EmbedsRoot    string
+	PagesDir      string
+	DataDir       string
+	Notifs        *notifBus
+	AudioRouter   *RTDTAudioRouter
+	Invites       *RTDTInviteStore
+	Reinvites     *gcReinviteTracker
+	Unrepl        *unreplTracker
+	DownloadCaps  *downloadCapTracker
+	Notes         *notificationStore
+	Groups        *contactGroupsStore
+	GamingJournal *gamingJournal
+	AppName       string
+	AppVersion    string
 
 	// Settings persists dashboard-changeable daemon settings; EffectiveBehavior
 	// is the resolved set of BR behavior values this process booted with (fixed

@@ -67,23 +67,24 @@ type BRClientCfg struct {
 	SeederCachePath string
 	// MsgsRoot is the message-log directory; used to recover a GC's name from
 	// its log filename after the GC has been deleted locally (e.g. on a kick).
-	MsgsRoot     string
-	ProxyAddr    string
-	ProxyUser    string
-	ProxyPass    string
-	TorIsolation bool
-	CircuitLimit uint32
-	Tracker      *Tracker
-	Notifs       *notifBus
-	AudioRouter  *RTDTAudioRouter
-	Invites      *RTDTInviteStore
-	Reinvites    *gcReinviteTracker
-	Unrepl       *unreplTracker
-	DownloadCaps *downloadCapTracker
-	Notes        *notificationStore
-	Groups       *contactGroupsStore
-	LogFn        func(subsys string) slog.Logger
-	IdentityChan <-chan *zkidentity.FullIdentity
+	MsgsRoot      string
+	ProxyAddr     string
+	ProxyUser     string
+	ProxyPass     string
+	TorIsolation  bool
+	CircuitLimit  uint32
+	Tracker       *Tracker
+	Notifs        *notifBus
+	AudioRouter   *RTDTAudioRouter
+	Invites       *RTDTInviteStore
+	Reinvites     *gcReinviteTracker
+	Unrepl        *unreplTracker
+	DownloadCaps  *downloadCapTracker
+	Notes         *notificationStore
+	Groups        *contactGroupsStore
+	GamingJournal *gamingJournal
+	LogFn         func(subsys string) slog.Logger
+	IdentityChan  <-chan *zkidentity.FullIdentity
 
 	// Behavior is the resolved set of runtime-changeable BR behavior settings
 	// (settings.json with BR ship defaults applied) forwarded into client.Config.
@@ -1312,6 +1313,11 @@ func startBRClient(cfg BRClientCfg) (*client.Client, error) {
 			// dedicated path after BR has logged them, then stop before the
 			// ordinary chat event can badge or render the group conversation.
 			if isGamingEnvelope(gcm.Message) {
+				if cfg.GamingJournal != nil {
+					if err := cfg.GamingJournal.append(gcm.ID.String(), ru.ID().String(), gcm.Message, ts, false); err != nil {
+						nlog.Errorf("Unable to journal gaming frame from %s: %v", ru.ID(), err)
+					}
+				}
 				notifs.Publish(NotifEvent{
 					Type:      "gaming-frame",
 					Timestamp: ts,

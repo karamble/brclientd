@@ -21,10 +21,6 @@ func TestGamingFramesArePartitionedFromChat(t *testing.T) {
 	if len(chat) != 2 || chat[0].Message != human || chat[1].Message != malformed {
 		t.Fatalf("chat partition = %#v", chat)
 	}
-	protocol := onlyGamingFrames(append([]clientdb.PMLogEntry(nil), entries...))
-	if len(protocol) != 1 || protocol[0].Message != gamingwire.SampleEnvelope {
-		t.Fatalf("protocol partition = %#v", protocol)
-	}
 }
 
 func TestGamingFilterGuardSampleMatchesBroadRules(t *testing.T) {

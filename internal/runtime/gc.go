@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/companyzero/bisonrelay/client"
 	"github.com/companyzero/bisonrelay/client/clientdb"
@@ -383,6 +384,11 @@ func (s *StatusServer) handleGCMessage(w http.ResponseWriter, r *http.Request, g
 		http.Error(w, "send: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	if isGamingEnvelope(req.Message) && s.GamingJournal != nil {
+		if err := s.GamingJournal.append(gcid.String(), c.PublicID().String(), req.Message, time.Now(), true); err != nil {
+			s.Log.Errorf("Unable to journal sent gaming frame: %v", err)
+		}
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -475,8 +481,8 @@ func (s *StatusServer) handleGCHistory(w http.ResponseWriter, r *http.Request, g
 	var zeroUID clientintf.UserID
 	filtered := entries[:0]
 	for _, e := range entries {
-		// Protocol traffic remains in BR's raw log for the dedicated gaming
-		// replay endpoint, but never enters user-facing chat history.
+		// Protocol traffic is replayed from the gaming journal and never
+		// enters user-facing chat history.
 		if isGamingEnvelope(e.Message) {
 			continue
 		}

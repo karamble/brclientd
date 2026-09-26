@@ -6,7 +6,6 @@ package runtime
 
 import (
 	"encoding/json"
-	"math"
 	"net/http"
 
 	"github.com/companyzero/bisonrelay/client/clientdb"
@@ -30,32 +29,17 @@ func withoutGamingFrames(entries []clientdb.PMLogEntry) []clientdb.PMLogEntry {
 	return out
 }
 
-func onlyGamingFrames(entries []clientdb.PMLogEntry) []clientdb.PMLogEntry {
-	out := entries[:0]
-	for _, entry := range entries {
-		if isGamingEnvelope(entry.Message) {
-			out = append(out, entry)
-		}
-	}
-	return out
-}
-
-// handleGamingHistory serves the raw protocol frames for one group chat. The
-// ordinary /gc/{gcid}/history endpoint removes these before pagination; this
-// endpoint is exclusively for dcrpulse's durable inbox recovery and outbox
-// reconciliation.
+// handleGamingHistory serves one group chat's protocol frames from the gaming
+// journal, with each sender's authenticated UID. GET pages it newest first;
+// DELETE prunes the group once the dashboard has settled its funds. The
+// ordinary /gc/{gcid}/history endpoint never shows these frames.
 func (s *StatusServer) handleGamingHistory(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+	if r.Method != http.MethodGet && r.Method != http.MethodDelete {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	c := s.currentClient()
-	if c == nil {
-		http.Error(w, "BR client not yet running", http.StatusServiceUnavailable)
-		return
-	}
-	if s.DB == nil {
-		http.Error(w, "history unavailable: clientdb not attached", http.StatusServiceUnavailable)
+	if s.GamingJournal == nil {
+		http.Error(w, "gaming journal unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	var gcid zkidentity.ShortID
@@ -63,33 +47,32 @@ func (s *StatusServer) handleGamingHistory(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "invalid gcid: "+err.Error(), http.StatusBadRequest)
 		return
 	}
+	if r.Method == http.MethodDelete {
+		removed, err := s.GamingJournal.prune(gcid.String())
+		if err != nil {
+			http.Error(w, "prune gaming journal: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.Log.Infof("Pruned %d gaming frames of settled group %s", removed, gcid)
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	pageSize := parsePositiveInt(r.URL.Query().Get("page_size"), 50, 500)
 	pageNum := parseNonNegativeInt(r.URL.Query().Get("page"), 0)
-
-	dbGC, err := c.GetGCDB(gcid)
+	entries, err := s.GamingJournal.history(gcid.String())
 	if err != nil {
-		http.Error(w, "get gc: "+err.Error(), http.StatusNotFound)
+		http.Error(w, "read gaming journal: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	var entries []clientdb.PMLogEntry
-	err = s.DB.View(r.Context(), func(tx clientdb.ReadTx) error {
-		got, err := s.DB.ReadLogGCMsg(tx, dbGC.Name(), gcid, math.MaxInt32, 0)
-		if err != nil {
-			return err
-		}
-		entries = got
-		return nil
-	})
-	if err != nil {
-		http.Error(w, "read gc log: "+err.Error(), http.StatusInternalServerError)
-		return
+	entries = historyPage(entries, pageSize, pageNum)
+	if entries == nil {
+		entries = []gamingJournalEntry{}
 	}
-	entries = historyPage(onlyGamingFrames(entries), pageSize, pageNum)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(struct {
-		GCID     string                `json:"gcid"`
-		Page     int                   `json:"page"`
-		PageSize int                   `json:"page_size"`
-		Entries  []clientdb.PMLogEntry `json:"entries"`
+		GCID     string               `json:"gcid"`
+		Page     int                  `json:"page"`
+		PageSize int                  `json:"page_size"`
+		Entries  []gamingJournalEntry `json:"entries"`
 	}{gcid.String(), pageNum, pageSize, entries})
 }

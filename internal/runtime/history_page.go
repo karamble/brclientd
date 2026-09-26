@@ -4,10 +4,6 @@
 
 package runtime
 
-import (
-	"github.com/companyzero/bisonrelay/client/clientdb"
-)
-
 // historyPage slices one page out of already-filtered log entries, mirroring
 // clientdb's paging: entries are oldest-first and page 0 is the newest
 // pageSize entries. The history handlers cannot use clientdb's own paging
@@ -17,7 +13,7 @@ import (
 //
 // One deliberate difference from clientdb: a page past the oldest entry is
 // empty rather than a repeat of the newest page, so a pager can terminate.
-func historyPage(entries []clientdb.PMLogEntry, pageSize, pageNum int) []clientdb.PMLogEntry {
+func historyPage[E any](entries []E, pageSize, pageNum int) []E {
 	if pageSize <= 0 || pageNum < 0 {
 		return entries[:0]
 	}
