@@ -417,8 +417,6 @@ github.com/juju/webbrowser v0.0.0-20160309143629-54b8c57083b4/go.mod h1:G6PCelgk
 github.com/julienschmidt/httprouter v1.2.0/go.mod h1:SYymIcj16QtmaHHD7aYtjjsJG7VTCxuUUipMqKk8s4w=
 github.com/karamble/brmcp v0.1.1-0.20260927122447-98e5c37a0d7d h1:nwJzIcF/t8HClc+euiSCc6+G350Za0lios2yjgFG56o=
 github.com/karamble/brmcp v0.1.1-0.20260927122447-98e5c37a0d7d/go.mod h1:OBQunjwMokhYpI6WHjOP6qhVf0tnTI3FH7WaJSs4I9A=
-github.com/karamble/dcrgaming-sdk v0.3.1-0.20260927081833-403dc8465987 h1:4QeHE+cSRwGYpydkAN52tJ6gZKhIYfDSdJAdPp5EB2w=
-github.com/karamble/dcrgaming-sdk v0.3.1-0.20260927081833-403dc8465987/go.mod h1:3XATpuGv4Qvij5UqLSY42KZhgDB1bleySuy17rTrM0E=
 github.com/kisielk/errcheck v1.5.0/go.mod h1:pFxgyoBC7bSaBwPgfKdkLd5X25qrDl4LWUI2bnpBCr8=
 github.com/kisielk/gotool v1.0.0/go.mod h1:XhKaO+MFFWcvkIS/tQcRk01m1F5IRFswLeQ+oQHNcck=
 github.com/kkdai/bstream v1.0.0 h1:Se5gHwgp2VT2uHfDrkbbgbgEvV9cimLELwrPJctSjg8=

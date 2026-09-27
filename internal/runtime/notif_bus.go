@@ -199,7 +199,7 @@ func (b *notifBus) Publish(evt NotifEvent) {
 
 // formatNotifDrop names the most recent type dropped, which is the difference
 // between a line an operator can act on and one they cannot: file transfer
-// progress is noise, a gaming frame is a table losing a move.
+// progress is noise, a lost chat message is not.
 func formatNotifDrop(s *subscriber, now time.Time) string {
 	window := "since the last report"
 	if !s.lastLog.IsZero() {
