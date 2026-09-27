@@ -9,8 +9,8 @@ import (
 
 	"github.com/companyzero/bisonrelay/client"
 	"github.com/decred/slog"
-	"github.com/karamble/brmcp/bridge"
 	"github.com/karamble/brmcp/brclient"
+	"github.com/karamble/brmcp/bridge"
 )
 
 // The BR-MCP client bridge (github.com/karamble/brmcp/bridge) lets local
