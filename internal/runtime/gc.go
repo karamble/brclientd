@@ -26,6 +26,7 @@ import (
 //   POST   /gc/create
 //   GET    /gc/invites
 //   POST   /gc/invites/accept
+//   POST   /gc/invites/blocked/dismiss
 //   GET    /gc/{gcid}
 //   POST   /gc/{gcid}/invite
 //   POST   /gc/{gcid}/message
@@ -56,6 +57,8 @@ func (s *StatusServer) handleGC(w http.ResponseWriter, r *http.Request) {
 		s.handleGCInvitesList(w, r)
 	case path == "/invites/accept":
 		s.handleGCInvitesAccept(w, r)
+	case path == "/invites/blocked/dismiss":
+		s.handleGCBlockedReinviteDismiss(w, r)
 	default:
 		rest := strings.TrimPrefix(path, "/")
 		parts := strings.SplitN(rest, "/", 2)
@@ -318,6 +321,31 @@ func (s *StatusServer) handleGCInvitesAccept(w http.ResponseWriter, r *http.Requ
 	if err := c.AcceptGroupChatInvite(req.IID); err != nil {
 		http.Error(w, "accept: "+err.Error(), http.StatusInternalServerError)
 		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleGCBlockedReinviteDismiss forgets a blocked re-invite, so it is listed
+// again only when the next one arrives. It needs no BR client.
+func (s *StatusServer) handleGCBlockedReinviteDismiss(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		GCID string `json:"gcid"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	var gcid zkidentity.ShortID
+	if err := gcid.FromString(req.GCID); err != nil {
+		http.Error(w, "invalid gcid: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if s.Reinvites != nil {
+		s.Reinvites.Clear(gcid.String())
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
